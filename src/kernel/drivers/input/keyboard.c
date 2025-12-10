@@ -3,6 +3,7 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: PS/2 keyboard driver that polls scancodes and returns characters.
  */
+#include <lux/interrupt.h>
 #include <lux/keyboard.h>
 #include <lux/io.h>
 #include <stdbool.h>
@@ -143,6 +144,12 @@ static bool caps_lock_active;
 static bool extended_scancode_pending;
 static bool alt_gr_active;
 
+#define KEYBOARD_EVENT_CAPACITY 64u
+static struct keyboard_event event_queue[KEYBOARD_EVENT_CAPACITY];
+static size_t event_head;
+static size_t event_tail;
+static size_t event_count;
+
 /**
  * Determine whether a character is an ASCII letter or one of the supported German umlaut letters (ä, Ä, ö, Ö, ü, Ü).
  * @param c Character to test.
@@ -267,6 +274,62 @@ static char apply_control_mapping(char c)
     return c;
 }
 
+static uint8_t keyboard_current_modifiers(void)
+{
+    uint8_t modifiers = 0;
+    if (left_shift_pressed || right_shift_pressed) {
+        modifiers |= KEYBOARD_MOD_SHIFT;
+    }
+    if (left_ctrl_pressed || right_ctrl_pressed) {
+        modifiers |= KEYBOARD_MOD_CTRL;
+    }
+    if (alt_gr_active) {
+        modifiers |= KEYBOARD_MOD_ALTGR;
+    }
+    if (caps_lock_active) {
+        modifiers |= KEYBOARD_MOD_CAPSLOCK;
+    }
+    return modifiers;
+}
+
+static void keyboard_queue_event(char symbol)
+{
+    if (!symbol) {
+        return;
+    }
+
+    struct keyboard_event event = {
+        .symbol = symbol,
+        .modifiers = keyboard_current_modifiers(),
+        .pressed = true
+    };
+
+    if (event_count >= KEYBOARD_EVENT_CAPACITY) {
+        event_tail = (event_tail + 1u) % KEYBOARD_EVENT_CAPACITY;
+        --event_count;
+    }
+
+    event_queue[event_head] = event;
+    event_head = (event_head + 1u) % KEYBOARD_EVENT_CAPACITY;
+    ++event_count;
+
+    if ((unsigned char)symbol == 0x03u) {
+        interrupt_raise(INTERRUPT_SIGNAL_CTRL_C);
+    }
+}
+
+static bool keyboard_dequeue_event(struct keyboard_event *event)
+{
+    if (!event_count || !event) {
+        return false;
+    }
+
+    *event = event_queue[event_tail];
+    event_tail = (event_tail + 1u) % KEYBOARD_EVENT_CAPACITY;
+    --event_count;
+    return true;
+}
+
 /**
  * Set the active keyboard layout used for scancode-to-character translation.
  *
@@ -336,6 +399,7 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
         char extended = translate_extended_scancode(scancode);
         if (extended) {
             *out_char = extended;
+            keyboard_queue_event(extended);
             return true;
         }
         return false;
@@ -375,6 +439,7 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
     }
 
     *out_char = translated;
+    keyboard_queue_event(translated);
     return true;
 }
 
@@ -387,7 +452,7 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
  * @param out_char Pointer to a char where the translated character will be stored; must not be NULL.
  * @returns `true` if a mapped character was produced and written to `out_char`, `false` otherwise.
  */
-bool keyboard_poll_char(char *out_char)
+static bool keyboard_scan_symbol(char *out_char)
 {
     if (!out_char) {
         return false;
@@ -417,6 +482,11 @@ bool keyboard_poll_char(char *out_char)
     }
 }
 
+bool keyboard_poll_char(char *out_char)
+{
+    return keyboard_scan_symbol(out_char);
+}
+
 /**
  * Read the next translated character from the keyboard, waiting until one is available.
  *
@@ -429,4 +499,33 @@ char keyboard_read_char(void)
         continue;
     }
     return result;
+}
+
+bool keyboard_poll_event(struct keyboard_event *event)
+{
+    if (!event) {
+        return false;
+    }
+
+    char unused;
+    (void)keyboard_scan_symbol(&unused);
+    return keyboard_dequeue_event(event);
+}
+
+bool keyboard_read_event(struct keyboard_event *event)
+{
+    if (!event) {
+        return false;
+    }
+
+    while (!keyboard_poll_event(event)) {
+        continue;
+    }
+
+    return true;
+}
+
+uint8_t keyboard_modifiers(void)
+{
+    return keyboard_current_modifiers();
 }

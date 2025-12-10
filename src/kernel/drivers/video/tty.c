@@ -278,3 +278,31 @@ uint8_t tty_get_cell_color(size_t row, size_t col)
     uint16_t entry = VGA_MEMORY[row * VGA_WIDTH + col];
     return (uint8_t)(entry >> 8);
 }
+
+void tty_set_cursor_position(size_t row, size_t col)
+{
+    if (row >= VGA_HEIGHT)
+    {
+        row = VGA_HEIGHT - 1;
+    }
+    if (col >= VGA_WIDTH)
+    {
+        col = VGA_WIDTH - 1;
+    }
+
+    cursor_row = row;
+    cursor_col = col;
+    tty_sync_cursor();
+}
+
+void tty_get_cursor_position(size_t *row, size_t *col)
+{
+    if (row)
+    {
+        *row = cursor_row;
+    }
+    if (col)
+    {
+        *col = cursor_col;
+    }
+}

@@ -27,3 +27,5 @@ size_t tty_cols(void);
 void tty_write_cell(size_t row, size_t col, char c, uint8_t color);
 char tty_get_cell_character(size_t row, size_t col);
 uint8_t tty_get_cell_color(size_t row, size_t col);
+void tty_set_cursor_position(size_t row, size_t col);
+void tty_get_cursor_position(size_t *row, size_t *col);

@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include <lux/ata.h>
+#include <lux/interrupt.h>
 #include <lux/fs.h>
 #include <lux/memory.h>
 #include <lux/shell.h>
@@ -31,6 +32,7 @@ void kernel(void)
 {
     heap_init();
     tty_init(0x1F);
+    interrupt_dispatcher_init();
 
     if (!ata_pio_init()) {
         tty_write_string("[disk] ATA PIO init failed; filesystem disabled.\n");
