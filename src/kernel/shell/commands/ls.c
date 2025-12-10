@@ -14,7 +14,7 @@ static void ls_emit(const struct fs_dirent *entry, void *user_data)
     }
 
     char line[96];
-    snprintf(line, sizeof(line), "%c %8lu %s\n",
+    snprintf(line, sizeof(line), "%c %lu %s\n",
              entry->is_dir ? 'd' : '-',
              (unsigned long)entry->size,
              entry->name);
