@@ -6,6 +6,16 @@ struct ls_ctx {
     const struct shell_io *io;
 };
 
+/**
+ * Emit a single directory entry line to the configured shell I/O.
+ *
+ * Formats and writes a line containing an entry type indicator (`d` for directory,
+ * `-` for file), the entry size in bytes, and the entry name, followed by a newline.
+ *
+ * @param entry Pointer to the directory entry to emit.
+ * @param user_data Pointer to an `ls_ctx` instance carrying the `shell_io` to write to;
+ *                  if `user_data` is NULL or its `io` is NULL, the function does nothing.
+ */
 static void ls_emit(const struct fs_dirent *entry, void *user_data)
 {
     struct ls_ctx *ctx = (struct ls_ctx *)user_data;
@@ -21,6 +31,13 @@ static void ls_emit(const struct fs_dirent *entry, void *user_data)
     shell_io_write_string(ctx->io, line);
 }
 
+/**
+ * Print a standardized "cannot access" error message to the provided shell I/O.
+ *
+ * If `path` is NULL, "/" is used in the message.
+ * @param io Shell I/O interface to write the message to.
+ * @param path Path that could not be accessed, or NULL to indicate root ("/").
+ */
 static void ls_print_error(const struct shell_io *io, const char *path)
 {
     shell_io_write_string(io, "ls: cannot access ");
@@ -28,6 +45,17 @@ static void ls_print_error(const struct shell_io *io, const char *path)
     shell_io_write_string(io, "\n");
 }
 
+/**
+ * List directory contents for a given path and write formatted output to the provided shell I/O.
+ *
+ * If `path` is NULL, the root path ("/") is used. When `show_header` is true, a header line
+ * containing the target path followed by ':' is written before the listing. If the directory
+ * cannot be listed, an error message is written to `io`.
+ *
+ * @param path Path of the directory to list, or NULL to list "/".
+ * @param io   Shell I/O interface used for all output.
+ * @param show_header If true, print a header line with the target path before the listing.
+ */
 static void ls_list_path(const char *path, const struct shell_io *io, bool show_header)
 {
     const char *target = path ? path : "/";
@@ -43,6 +71,18 @@ static void ls_list_path(const char *path, const struct shell_io *io, bool show_
     }
 }
 
+/**
+ * Handle the "ls" shell command by listing directory contents for the given paths.
+ *
+ * If the filesystem is unavailable, writes an error message to the provided IO.
+ * With no path arguments, lists the root directory without a header. When one or
+ * more paths are provided, lists each path; a header is printed when multiple
+ * paths are requested and listings are separated by a blank line.
+ *
+ * @param argc Number of arguments in argv (command name plus any paths).
+ * @param argv Argument vector; argv[1]..argv[argc-1] are treated as paths to list.
+ * @param io   Shell I/O interface used for all output.
+ */
 static void ls_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (!fs_ready()) {

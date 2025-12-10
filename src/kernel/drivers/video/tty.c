@@ -243,6 +243,13 @@ void tty_write_cell(size_t row, size_t col, char c, uint8_t color)
 
     VGA_MEMORY[row * VGA_WIDTH + col] = (uint16_t) color << 8 | (uint8_t) c;
 }
+/**
+ * Retrieve the ASCII character stored in the text-mode VGA cell at the given coordinates.
+ *
+ * @param row Zero-based row index (0 to VGA_HEIGHT - 1).
+ * @param col Zero-based column index (0 to VGA_WIDTH - 1).
+ * @returns The character stored in the specified cell, or `'\0'` if the coordinates are out of bounds.
+ */
 char tty_get_cell_character(size_t row, size_t col)
 {
     if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
@@ -254,6 +261,13 @@ char tty_get_cell_character(size_t row, size_t col)
     return (char)(entry & 0xFF);
 }
 
+/**
+ * Retrieve the VGA color attribute byte stored at the given text-mode cell.
+ *
+ * @param row Zero-based row index of the cell.
+ * @param col Zero-based column index of the cell.
+ * @returns The color attribute byte from the cell at (row, col); returns 0 if (row, col) is outside the screen bounds.
+ */
 uint8_t tty_get_cell_color(size_t row, size_t col)
 {
     if (row >= VGA_HEIGHT || col >= VGA_WIDTH)

@@ -224,11 +224,22 @@ static char translate_extended_scancode(uint8_t scancode)
     }
 }
 
+/**
+ * Determine whether either Ctrl modifier key is currently pressed.
+ *
+ * @returns `true` if either the left or right Ctrl key is pressed, `false` otherwise.
+ */
 static bool control_modifier_active(void)
 {
     return left_ctrl_pressed || right_ctrl_pressed;
 }
 
+/**
+ * Determines whether a character can be mapped by the Control modifier.
+ *
+ * @param c Character to test; evaluated as an ASCII letter.
+ * @returns `true` if `c` is an ASCII letter `a`–`z` or `A`–`Z`, `false` otherwise.
+ */
 static bool is_control_mappable(char c)
 {
     if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
@@ -237,6 +248,14 @@ static bool is_control_mappable(char c)
     return false;
 }
 
+/**
+ * Map an alphabetic character to its control-code equivalent; leave other characters unchanged.
+ *
+ * Converts lowercase `a`–`z` and uppercase `A`–`Z` to control codes 1–26 (`'a'` or `'A'` -> 1, `'b'` or `'B'` -> 2, ..., `'z'` or `'Z'` -> 26). Non-alphabetic characters are returned unchanged.
+ *
+ * @param c Character to map.
+ * @returns The control-code (`1`–`26`) for alphabetic input, or the original character for non-alphabetic input.
+ */
 static char apply_control_mapping(char c)
 {
     if (c >= 'a' && c <= 'z') {
@@ -271,14 +290,18 @@ void keyboard_set_layout(enum keyboard_layout layout)
 }
 
 /**
- * Read the next translated character from the PS/2 keyboard.
+ * Process a PS/2 scancode (make or break), update keyboard modifier state,
+ * and produce a translated character when one is available.
  *
- * Polls the keyboard controller until a make code produces a mapped character,
- * handling extended (0xE0) sequences and updating modifier state (left/right
- * Shift, Caps Lock, AltGr) as scancodes are seen.
+ * Updates internal modifier state (left/right Shift, left/right Ctrl, Caps Lock,
+ * AltGr) according to the scancode and extended flag; recognizes extended
+ * sequences (0xE0) and maps certain extended keys.
  *
- * @returns The next character translated according to the current keyboard
- *          layout. */
+ * @param scancode Scancode byte from the PS/2 controller (high bit set for break codes).
+ * @param is_extended True if this scancode is part of a preceding 0xE0 extended sequence.
+ * @param out_char Pointer to a char where the translated character will be stored if produced.
+ * @returns `true` if a mapped character was produced and written to *out_char, `false` otherwise.
+ */
 static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *out_char)
 {
     if (scancode & 0x80) {
@@ -355,6 +378,15 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
     return true;
 }
 
+/**
+ * Polls the PS/2 controller for a scancode sequence and, when a translated character is available, stores it.
+ *
+ * Processes make/break and extended scancode sequences and updates modifier state via keyboard_process_scancode.
+ * Does not block: returns immediately if no data is available from the controller.
+ *
+ * @param out_char Pointer to a char where the translated character will be stored; must not be NULL.
+ * @returns `true` if a mapped character was produced and written to `out_char`, `false` otherwise.
+ */
 bool keyboard_poll_char(char *out_char)
 {
     if (!out_char) {
@@ -385,6 +417,11 @@ bool keyboard_poll_char(char *out_char)
     }
 }
 
+/**
+ * Read the next translated character from the keyboard, waiting until one is available.
+ *
+ * @returns The next translated character produced by the keyboard (respecting current layout and active modifiers).
+ */
 char keyboard_read_char(void)
 {
     char result;

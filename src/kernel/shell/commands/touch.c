@@ -1,12 +1,23 @@
 #include <lux/fs.h>
 #include <lux/shell.h>
 
+/**
+ * Print the usage message for the `touch` command to the given shell IO.
+ *
+ * @param io Shell IO to write the usage text to.
+ */
 static void touch_usage(const struct shell_io *io)
 {
     shell_io_write_string(io, "Usage: touch <path> [path...]\n");
     shell_io_write_string(io, "Pipe data into touch to overwrite a single file.\n");
 }
 
+/**
+ * Write a formatted error message for the touch command to the provided shell IO.
+ *
+ * @param path Path of the file related to the error.
+ * @param reason Short text describing the error cause.
+ */
 static void touch_print_error(const struct shell_io *io, const char *path, const char *reason)
 {
     shell_io_write_string(io, "touch: ");
@@ -16,6 +27,20 @@ static void touch_print_error(const struct shell_io *io, const char *path, const
     shell_io_write_string(io, "\n");
 }
 
+/**
+ * Handle the shell "touch" command: create files and optionally write piped data.
+ *
+ * Prints usage when no path arguments are provided and prints an error if the
+ * filesystem is not available. If piped input is present it must target a
+ * single path; otherwise an error is printed. For each provided path this
+ * function attempts to create the file and, when piped data exists, overwrites
+ * the file contents with that data.
+ *
+ * @param argc Number of arguments (including command name).
+ * @param argv Argument vector; target paths are listed in argv[1]..argv[argc-1].
+ * @param io Shell I/O context; may contain piped input in io->input with length
+ *           io->input_len.
+ */
 static void touch_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc < 2) {

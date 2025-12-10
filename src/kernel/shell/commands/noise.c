@@ -26,7 +26,13 @@ static uint32_t noise_rand(void) {
 }
 
 /**
- * Delay execution for the configured frame interval while allowing interrupts.
+ * Delay for the configured frame interval while allowing a shell interrupt to abort.
+ *
+ * Polls for a shell interrupt repeatedly and sleeps in short increments; if an
+ * interrupt is detected the delay ends early.
+ *
+ * @returns `true` if the full frame delay completed without an interrupt, `false` if
+ * interrupted before the delay finished.
  */
 static bool noise_delay(void) {
     for (uint32_t i = 0; i < NOISE_FRAME_DELAY_MS; ++i) {
@@ -71,10 +77,13 @@ static void draw_noise_frame(void)
 }
 
 /**
- * Render animated random noise to the terminal for a fixed duration.
+ * Render animated random noise in the terminal for a fixed duration.
  *
- * Clears the terminal, repeatedly draws a sequence of noise frames with
- * inter-frame delays, then clears the terminal and writes "Noise done.".
+ * Clears the terminal, draws up to NOISE_FRAMES noise frames with interrupt-aware
+ * delays between frames, and clears the terminal on exit. If not interrupted,
+ * writes "Noise done.\n" to the provided shell I/O.
+ *
+ * @param io Shell I/O used to write the completion message.
  */
 static void noise_handler(int argc, char **argv, const struct shell_io *io) {
     (void)argc;
