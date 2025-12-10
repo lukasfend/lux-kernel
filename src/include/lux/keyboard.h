@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 enum keyboard_layout {
 	KEYBOARD_LAYOUT_EN_US = 0,
@@ -15,6 +16,20 @@ enum keyboard_layout {
 #define KEYBOARD_KEY_ARROW_UP   ((char)0x80)
 #define KEYBOARD_KEY_ARROW_DOWN ((char)0x81)
 
+#define KEYBOARD_MOD_SHIFT    0x01u
+#define KEYBOARD_MOD_CTRL     0x02u
+#define KEYBOARD_MOD_ALTGR    0x04u
+#define KEYBOARD_MOD_CAPSLOCK 0x08u
+
+struct keyboard_event {
+	char symbol;
+	uint8_t modifiers;
+	bool pressed;
+};
+
 void keyboard_set_layout(enum keyboard_layout layout);
 char keyboard_read_char(void);
 bool keyboard_poll_char(char *out_char);
+bool keyboard_poll_event(struct keyboard_event *event);
+bool keyboard_read_event(struct keyboard_event *event);
+uint8_t keyboard_modifiers(void);

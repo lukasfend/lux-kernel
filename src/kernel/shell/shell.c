@@ -3,6 +3,7 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: Minimal interactive shell handling input, parsing, and built-ins.
  */
+#include <lux/interrupt.h>
 #include <lux/keyboard.h>
 #include <lux/shell.h>
 #include <stdbool.h>
@@ -15,7 +16,6 @@
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
 #define SHELL_CTRL_C 0x03
-#define TYPEAHEAD_CAPACITY INPUT_BUFFER_SIZE
 
 /**
  * Compute the length of a C string up to a maximum limit.
@@ -47,19 +47,74 @@ static char history[HISTORY_SIZE][INPUT_BUFFER_SIZE];
 static size_t history_count;
 static size_t history_head;
 
-static char pending_keys[TYPEAHEAD_CAPACITY];
-static size_t pending_head;
-static size_t pending_tail;
-static size_t pending_count;
+static char pending_input[INPUT_BUFFER_SIZE];
+static size_t pending_input_head;
+static size_t pending_input_tail;
+static size_t pending_input_count;
+
 static bool shell_interrupt_requested;
 static bool shell_interrupt_announced;
-
-static bool pending_input_push(char c);
-static bool pending_input_pop(char *c);
-static char read_char_with_pending(void);
+static int shell_interrupt_subscription = -1;
 static void shell_interrupt_reset_state(void);
+static void shell_interrupt_handler(enum interrupt_signal signal, void *context);
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
+
+/**
+ * Enqueue a character into the pending input circular buffer.
+ *
+ * If the buffer is full, the oldest pending character is discarded to make room.
+ *
+ * @param c Character to append to the pending input buffer.
+ */
+static void pending_input_push(char c)
+{
+    if (pending_input_count >= INPUT_BUFFER_SIZE) {
+        pending_input_head = (pending_input_head + 1u) % INPUT_BUFFER_SIZE;
+        --pending_input_count;
+    }
+
+    pending_input[pending_input_tail] = c;
+    pending_input_tail = (pending_input_tail + 1u) % INPUT_BUFFER_SIZE;
+    ++pending_input_count;
+}
+
+/**
+ * Remove and return the next pending input character from the circular pending_input buffer.
+ *
+ * @param out Pointer to a char where the popped character will be stored; must not be NULL.
+ * @returns `true` if a character was available and written to `out`, `false` if the buffer was empty or `out` is NULL.
+ */
+static bool pending_input_pop(char *out)
+{
+    if (!pending_input_count || !out) {
+        return false;
+    }
+
+    *out = pending_input[pending_input_head];
+    pending_input_head = (pending_input_head + 1u) % INPUT_BUFFER_SIZE;
+    --pending_input_count;
+    return true;
+}
+
+/**
+ * Poll the keyboard for available scancodes and queue them for later processing.
+ *
+ * Reads all currently available characters from the keyboard and appends each
+ * character that is not the shell's Ctrl-C sentinel to the pending input queue.
+ * Ctrl-C scancodes are consumed here but not queued so the interrupt handler can
+ * process them separately.
+ */
+static void collect_background_input(void)
+{
+    char symbol;
+    while (keyboard_poll_char(&symbol)) {
+        if ((unsigned char)symbol == (unsigned char)SHELL_CTRL_C) {
+            continue;
+        }
+        pending_input_push(symbol);
+    }
+}
 
 /**
  * Initialize a shell pipe buffer to an empty, non-overflowed state.
@@ -178,24 +233,15 @@ void shell_io_write_string(const struct shell_io *io, const char *str)
 }
 
 /**
- * Poll the keyboard for pending characters and record a Ctrl-C interrupt.
+ * Poll the keyboard for pending characters and report whether a Ctrl-C interrupt is pending.
  *
- * Enqueues non-Ctrl characters into the typeahead pending buffer. When a Ctrl-C
- * is detected, records that an interrupt was requested and (the first time)
- * writes a visible "^C" line to the TTY.
+ * If a Ctrl-C interrupt is pending and has not yet been announced, prints "^C\n" once and marks the interrupt as announced.
  *
  * @returns `true` if a Ctrl-C interrupt has been requested, `false` otherwise.
  */
 bool shell_interrupt_poll(void)
 {
-    char c;
-    while (keyboard_poll_char(&c)) {
-        if ((unsigned char)c == (unsigned char)SHELL_CTRL_C) {
-            shell_interrupt_requested = true;
-        } else {
-            pending_input_push(c);
-        }
-    }
+    collect_background_input();
 
     if (shell_interrupt_requested && !shell_interrupt_announced) {
         tty_write_string("^C\n");
@@ -263,55 +309,15 @@ static const char *history_get(size_t offset)
 }
 
 /**
- * Enqueue a single character into the typeahead (pending) input buffer.
+ * Get the next input character, using previously buffered background input if available.
  *
- * @param c Character to enqueue.
- * @returns `true` if the character was added to the buffer, `false` if the buffer is full.
- */
-static bool pending_input_push(char c)
-{
-    if (pending_count >= TYPEAHEAD_CAPACITY) {
-        return false;
-    }
-
-    pending_keys[pending_head] = c;
-    pending_head = (pending_head + 1u) % TYPEAHEAD_CAPACITY;
-    ++pending_count;
-    return true;
-}
-
-/**
- * Remove and optionally retrieve the oldest pending input character from the typeahead buffer.
- *
- * @param c If non-NULL, receives the popped character; if NULL the character is consumed and discarded.
- * @returns `true` if a character was popped, `false` if the pending buffer was empty.
- */
-static bool pending_input_pop(char *c)
-{
-    if (!pending_count) {
-        return false;
-    }
-
-    if (c) {
-        *c = pending_keys[pending_tail];
-    }
-
-    pending_tail = (pending_tail + 1u) % TYPEAHEAD_CAPACITY;
-    --pending_count;
-    return true;
-}
-
-/**
- * Retrieve the next available input character, using any queued (pending) input first.
- *
- * @returns The next input character: a character taken from the pending input queue if one is available,
- *          otherwise the next character returned by the keyboard input routine.
+ * @returns The next character from the pending input buffer if present, otherwise the next character read from the keyboard.
  */
 static char read_char_with_pending(void)
 {
-    char buffered;
-    if (pending_input_pop(&buffered)) {
-        return buffered;
+    char pending;
+    if (pending_input_pop(&pending)) {
+        return pending;
     }
     return keyboard_read_char();
 }
@@ -326,6 +332,24 @@ static void shell_interrupt_reset_state(void)
 {
     shell_interrupt_requested = false;
     shell_interrupt_announced = false;
+}
+
+/**
+ * Handle interrupt signals and flag a pending Ctrl-C request.
+ *
+ * Sets the internal `shell_interrupt_requested` flag when `signal` is
+ * `INTERRUPT_SIGNAL_CTRL_C`, leaving other signals unmodified.
+ *
+ * @param signal Interrupt signal delivered to the handler.
+ * @param context Unused context pointer (ignored).
+ */
+static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
+{
+    (void)context;
+    if (signal != INTERRUPT_SIGNAL_CTRL_C) {
+        return;
+    }
+    shell_interrupt_requested = true;
 }
 
 /**
@@ -905,6 +929,10 @@ void shell_run(void)
     if (!commands || !command_count) {
         tty_write_string("Unable to start shell: no commands registered.\n");
         return;
+    }
+
+    if (shell_interrupt_subscription < 0) {
+        shell_interrupt_subscription = interrupt_subscribe(INTERRUPT_SIGNAL_CTRL_C, shell_interrupt_handler, 0);
     }
 
     tty_write_string("Type 'help' for a list of commands.\n");

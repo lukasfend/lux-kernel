@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include <lux/ata.h>
+#include <lux/interrupt.h>
 #include <lux/fs.h>
 #include <lux/memory.h>
 #include <lux/shell.h>
@@ -22,15 +23,17 @@ static void banner(void)
 }
 
 /**
- * Initialize core subsystems, start the interactive shell, and enter an idle halt loop.
+ * Initialize core kernel subsystems, start the interactive shell, and halt the CPU if the shell exits.
  *
- * Performs early kernel setup (heap and TTY), displays the kernel banner, launches the shell,
- * and if the shell ever returns, halts the CPU in an infinite idle loop.
+ * Performs early kernel setup (heap allocator, TTY, and interrupt dispatcher), attempts disk and
+ * filesystem initialization (may continue without storage if those steps fail), displays the kernel
+ * banner, and launches the shell. If the shell ever returns, the function enters an infinite halted loop.
  */
 void kernel(void)
 {
     heap_init();
     tty_init(0x1F);
+    interrupt_dispatcher_init();
 
     if (!ata_pio_init()) {
         tty_write_string("[disk] ATA PIO init failed; filesystem disabled.\n");

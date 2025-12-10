@@ -3,6 +3,7 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: PS/2 keyboard driver that polls scancodes and returns characters.
  */
+#include <lux/interrupt.h>
 #include <lux/keyboard.h>
 #include <lux/io.h>
 #include <stdbool.h>
@@ -143,6 +144,12 @@ static bool caps_lock_active;
 static bool extended_scancode_pending;
 static bool alt_gr_active;
 
+#define KEYBOARD_EVENT_CAPACITY 64u
+static struct keyboard_event event_queue[KEYBOARD_EVENT_CAPACITY];
+static size_t event_head;
+static size_t event_tail;
+static size_t event_count;
+
 /**
  * Determine whether a character is an ASCII letter or one of the supported German umlaut letters (ä, Ä, ö, Ö, ü, Ü).
  * @param c Character to test.
@@ -268,6 +275,85 @@ static char apply_control_mapping(char c)
 }
 
 /**
+ * Compute the current keyboard modifier bitfield from internal modifier states.
+ *
+ * @returns Bitfield of active modifiers: combination of KEYBOARD_MOD_SHIFT, KEYBOARD_MOD_CTRL,
+ *          KEYBOARD_MOD_ALTGR, and KEYBOARD_MOD_CAPSLOCK.
+ */
+static uint8_t keyboard_current_modifiers(void)
+{
+    uint8_t modifiers = 0;
+    if (left_shift_pressed || right_shift_pressed) {
+        modifiers |= KEYBOARD_MOD_SHIFT;
+    }
+    if (left_ctrl_pressed || right_ctrl_pressed) {
+        modifiers |= KEYBOARD_MOD_CTRL;
+    }
+    if (alt_gr_active) {
+        modifiers |= KEYBOARD_MOD_ALTGR;
+    }
+    if (caps_lock_active) {
+        modifiers |= KEYBOARD_MOD_CAPSLOCK;
+    }
+    return modifiers;
+}
+
+/**
+ * Enqueue a translated keyboard symbol into the internal event queue.
+ *
+ * If `symbol` is 0, no event is queued. When the queue is full, the oldest
+ * event is dropped to make room for the new one. The queued event captures
+ * the current modifier bitfield and marks the key as pressed. If `symbol`
+ * is ASCII 0x03 (ETX), the function also raises the CTRL-C interrupt.
+ *
+ * @param symbol The translated symbol to enqueue (must be non-zero to be queued).
+ */
+static void keyboard_queue_event(char symbol)
+{
+    if (!symbol) {
+        return;
+    }
+
+    struct keyboard_event event = {
+        .symbol = symbol,
+        .modifiers = keyboard_current_modifiers(),
+        .pressed = true
+    };
+
+    if (event_count >= KEYBOARD_EVENT_CAPACITY) {
+        event_tail = (event_tail + 1u) % KEYBOARD_EVENT_CAPACITY;
+        --event_count;
+    }
+
+    event_queue[event_head] = event;
+    event_head = (event_head + 1u) % KEYBOARD_EVENT_CAPACITY;
+    ++event_count;
+
+    if ((unsigned char)symbol == 0x03u) {
+        interrupt_raise(INTERRUPT_SIGNAL_CTRL_C);
+    }
+}
+
+/**
+ * Dequeue the next keyboard event into the provided structure.
+ *
+ * @param event Pointer to a caller-provided structure that will be filled with the next queued keyboard event.
+ *               Must not be NULL.
+ * @returns `true` if an event was dequeued into `event`, `false` if the queue was empty or `event` is NULL.
+ */
+static bool keyboard_dequeue_event(struct keyboard_event *event)
+{
+    if (!event_count || !event) {
+        return false;
+    }
+
+    *event = event_queue[event_tail];
+    event_tail = (event_tail + 1u) % KEYBOARD_EVENT_CAPACITY;
+    --event_count;
+    return true;
+}
+
+/**
  * Set the active keyboard layout used for scancode-to-character translation.
  *
  * Updates the driver's internal layout selection so subsequent key reads use the
@@ -290,17 +376,15 @@ void keyboard_set_layout(enum keyboard_layout layout)
 }
 
 /**
- * Process a PS/2 scancode (make or break), update keyboard modifier state,
- * and produce a translated character when one is available.
+ * Process a PS/2 scancode, update internal modifier state, and emit a translated character when available.
  *
- * Updates internal modifier state (left/right Shift, left/right Ctrl, Caps Lock,
- * AltGr) according to the scancode and extended flag; recognizes extended
- * sequences (0xE0) and maps certain extended keys.
+ * Updates internal modifier state (left/right Shift, left/right Ctrl, Caps Lock, AltGr) and enqueues
+ * a keyboard event when a character or recognized extended key is produced.
  *
- * @param scancode Scancode byte from the PS/2 controller (high bit set for break codes).
+ * @param scancode PS/2 scancode byte; the high bit set indicates a key release (break code).
  * @param is_extended True if this scancode is part of a preceding 0xE0 extended sequence.
- * @param out_char Pointer to a char where the translated character will be stored if produced.
- * @returns `true` if a mapped character was produced and written to *out_char, `false` otherwise.
+ * @param out_char Pointer to a char that receives the translated character when one is produced.
+ * @returns `true` if a translated character was produced and written to *out_char, `false` otherwise.
  */
 static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *out_char)
 {
@@ -336,6 +420,7 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
         char extended = translate_extended_scancode(scancode);
         if (extended) {
             *out_char = extended;
+            keyboard_queue_event(extended);
             return true;
         }
         return false;
@@ -375,19 +460,19 @@ static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *
     }
 
     *out_char = translated;
+    keyboard_queue_event(translated);
     return true;
 }
 
 /**
- * Polls the PS/2 controller for a scancode sequence and, when a translated character is available, stores it.
+ * Polls the PS/2 controller and produces a translated character when available.
  *
- * Processes make/break and extended scancode sequences and updates modifier state via keyboard_process_scancode.
- * Does not block: returns immediately if no data is available from the controller.
+ * Reads available scancode bytes (including extended 0xE0 sequences), updates modifier and translation state, and writes a translated character to `out_char` if one is produced; does not block if no data is available.
  *
  * @param out_char Pointer to a char where the translated character will be stored; must not be NULL.
  * @returns `true` if a mapped character was produced and written to `out_char`, `false` otherwise.
  */
-bool keyboard_poll_char(char *out_char)
+static bool keyboard_scan_symbol(char *out_char)
 {
     if (!out_char) {
         return false;
@@ -418,6 +503,17 @@ bool keyboard_poll_char(char *out_char)
 }
 
 /**
+ * Attempt to poll the keyboard and produce a translated character without blocking.
+ *
+ * @param out_char Pointer to a char that will be set to the translated character when available.
+ * @return `true` if a character was produced and written to `out_char`, `false` otherwise.
+ */
+bool keyboard_poll_char(char *out_char)
+{
+    return keyboard_scan_symbol(out_char);
+}
+
+/**
  * Read the next translated character from the keyboard, waiting until one is available.
  *
  * @returns The next translated character produced by the keyboard (respecting current layout and active modifiers).
@@ -429,4 +525,50 @@ char keyboard_read_char(void)
         continue;
     }
     return result;
+}
+
+/**
+ * Polls for the next keyboard event and writes it to the provided output if one is available.
+ * @param event Pointer to a caller-provided struct keyboard_event to receive the dequeued event; must not be NULL.
+ * @returns `true` if an event was dequeued and written to `event`, `false` otherwise (including when `event` is NULL or the queue is empty).
+ */
+bool keyboard_poll_event(struct keyboard_event *event)
+{
+    if (!event) {
+        return false;
+    }
+
+    char unused;
+    (void)keyboard_scan_symbol(&unused);
+    return keyboard_dequeue_event(event);
+}
+
+/**
+ * Block until the next keyboard event is available and store it in `event`.
+ *
+ * @param event Destination pointer for the dequeued keyboard event; must not be NULL.
+ * @returns `true` if an event was read and written to `event`, `false` if `event` is NULL.
+ */
+bool keyboard_read_event(struct keyboard_event *event)
+{
+    if (!event) {
+        return false;
+    }
+
+    while (!keyboard_poll_event(event)) {
+        continue;
+    }
+
+    return true;
+}
+
+/**
+ * Retrieve the currently active keyboard modifier flags.
+ *
+ * @returns Bitfield of active modifiers as a combination of `KEYBOARD_MOD_*` flags
+ *          (e.g., SHIFT, CTRL, ALTGR, CAPSLOCK).
+ */
+uint8_t keyboard_modifiers(void)
+{
+    return keyboard_current_modifiers();
 }

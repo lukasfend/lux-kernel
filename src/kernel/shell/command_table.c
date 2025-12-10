@@ -12,6 +12,7 @@ extern const struct shell_command shell_command_cat;
 extern const struct shell_command shell_command_touch;
 extern const struct shell_command shell_command_sleep;
 extern const struct shell_command shell_command_printf;
+extern const struct shell_command shell_command_mkdir;
 
 /**
  * Provide the table of built-in shell commands.
@@ -32,6 +33,7 @@ const struct shell_command *const *shell_builtin_commands(size_t *count)
         &shell_command_ls,
         &shell_command_cat,
         &shell_command_touch,
+        &shell_command_mkdir,
         &shell_command_sleep,
         &shell_command_printf
     };

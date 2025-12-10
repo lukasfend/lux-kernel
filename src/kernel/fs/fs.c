@@ -1047,10 +1047,9 @@ bool fs_ready(void)
 /**
  * Ensure a regular file exists at the given filesystem path, creating it if necessary.
  *
- * Requires the filesystem to be mounted. If the path already exists and is a regular
- * file the call succeeds; if it exists and is not a regular file the call fails.
- * The function will not create intermediate directories and rejects invalid leaf
- * names (empty, "." or "..").
+ * Does not create intermediate directories. Rejects empty leaf names and the special
+ * names "." and "..". Fails if an existing entry at the path is not a regular file
+ * or if the filesystem is not mounted.
  *
  * @param path Filesystem path for the file to ensure.
  * @returns `true` if the file exists or was created successfully, `false` otherwise.
@@ -1089,6 +1088,59 @@ bool fs_touch(const char *path)
     struct luxfs_dir_record record;
     record.inode = inode_index;
     memset(record.name, 0, sizeof(record.name));
+    luxfs_copy_name(record.name, leaf);
+
+    if (!luxfs_dir_append_record(parent, &record)) {
+        luxfs_mark_inode_free(inode_index);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Create a new directory at the specified filesystem path.
+ *
+ * Fails if the filesystem is not ready, the path is invalid, the parent
+ * directory cannot be resolved, or an entry with the same name already
+ * exists. Intermediate directories are not created automatically.
+ *
+ * @param path Filesystem path of the directory to create.
+ * @returns `true` if the directory was created successfully, `false` otherwise.
+ */
+bool fs_mkdir(const char *path)
+{
+    if (!fs_ready() || !path) {
+        return false;
+    }
+
+    uint32_t existing = 0;
+    if (luxfs_resolve(path, &existing)) {
+        return false;
+    }
+
+    uint32_t parent = 0;
+    char leaf[FS_NAME_MAX];
+    if (!luxfs_resolve_parent(path, &parent, leaf)) {
+        return false;
+    }
+
+    if (!leaf[0] || (leaf[0] == '.' && (leaf[1] == '\0' || (leaf[1] == '.' && leaf[2] == '\0')))) {
+        return false;
+    }
+
+    if (luxfs_dir_find(parent, leaf, &existing)) {
+        return false;
+    }
+
+    uint32_t inode_index = 0;
+    if (!luxfs_alloc_inode(LUXFS_NODE_DIR, parent, &inode_index)) {
+        return false;
+    }
+
+    struct luxfs_dir_record record;
+    memset(&record, 0, sizeof(record));
+    record.inode = inode_index;
     luxfs_copy_name(record.name, leaf);
 
     if (!luxfs_dir_append_record(parent, &record)) {

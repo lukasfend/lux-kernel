@@ -27,6 +27,7 @@ bool fs_mount(void);
 bool fs_ready(void);
 
 bool fs_touch(const char *path);
+bool fs_mkdir(const char *path);
 bool fs_list(const char *path, fs_dir_iter_cb cb, void *user_data);
 bool fs_stat_path(const char *path, struct fs_stat *out_stats);
 bool fs_read(const char *path, size_t offset, void *buffer, size_t length, size_t *bytes_read);
