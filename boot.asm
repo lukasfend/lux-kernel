@@ -1,5 +1,8 @@
-ORG 0x00
+ORG 0x7C00
 BITS 16
+
+CODE_SEG equ gdt_code - gdt_start
+DATA_SEG equ gdt_data - gdt_start
 
 _start:
     jmp short start
@@ -8,61 +11,65 @@ _start:
 times 33 db 0
 
 start:
-    jmp 0x7C0:step2
+    jmp 0x00:step2
 
 
 
 
 step2:
     cli ; Clear interrupts
-    mov ax, 0x7C0
+    mov ax, 0x00
     mov ds, ax
     mov es, ax
-    mov ax, 0x00
     mov ss, ax
     mov sp, 0x7C00
     sti ; Enable interrupts
 
-    ; Set interrupt vector table; stack segment -> assign interrupt logic
-    ; Exceptions: https://wiki.osdev.org/Exceptions 
-    ; Interrupt 0
-    mov ah, 2 ; Read sector
-    mov al, 1 ; 1 Sector to read
-    mov ch, 0 ; Cylinder number
-    mov cl, 2 ; read sector 2
-    mov dh, 0 ; Head number
-    mov bx, buffer
-    int 0x13 ; Invoke read command
-    
-    jc error ; jump-carry to error lbl
 
-    jmp $ ; HALT
+.load_protected:
+    cli
+    lgdt[gdt_descriptor]
+    mov eax, cr0
+    or eax, 0x1
+    mov cr0, eax
+    jmp CODE_SEG:load32
 
-error:
-    mov si, error_message
-    call print
+
+; GDT
+gdt_start:
+gdt_null:
+    dd 0x0
+    dd 0x0
+
+; offset 0x8
+gdt_code:   ; CS pointer
+    dw 0xFFFF   ; Segment limit for first 0-15 bits
+    dw 0        ; Base first 0-15 bits
+    db 0        ; Base 16-23 bits
+    db 0x9A     ; Access byte
+    db 11001111b ; High 4 bit flags, low 4 bit flags
+    db 0        ; Base 24-31 bits
+
+; offset 0x10
+gdt_data:       ; DS, SS, ES, FS, GS
+    dw 0xFFFF   ; Segment limit for first 0-15 bits
+    dw 0        ; Base first 0-15 bits
+    db 0        ; Base 16-23 bits
+    db 0x92     ; Access byte
+    db 11001111b ; High 4 bit flags, low 4 bit flags
+    db 0        ; Base 24-31 bits
+
+gdt_end:
+
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
+
+[BITS 32]
+load32:
     jmp $
-
-print:
-    mov bx, 0
-.loop:
-    lodsb
-    cmp al, 0
-    je .done
-    call print_char
-    jmp .loop
-.done:
-    ret
-
-print_char:
-    mov ah, 0Eh
-    int 0x10 ; Interrupts: https://www.ctyme.com/intr/int.htm
-    ret
 
 error_message: db 'Failed to load sector', 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
-
-; Empty buffer to be written to
-buffer:
