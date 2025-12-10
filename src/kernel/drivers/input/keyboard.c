@@ -137,6 +137,8 @@ static const struct keyboard_layout_map *current_layout = &layout_de_de;
 
 static bool left_shift_pressed;
 static bool right_shift_pressed;
+static bool left_ctrl_pressed;
+static bool right_ctrl_pressed;
 static bool caps_lock_active;
 static bool extended_scancode_pending;
 static bool alt_gr_active;
@@ -223,6 +225,49 @@ static char translate_extended_scancode(uint8_t scancode)
 }
 
 /**
+ * Determine whether either Ctrl modifier key is currently pressed.
+ *
+ * @returns `true` if either the left or right Ctrl key is pressed, `false` otherwise.
+ */
+static bool control_modifier_active(void)
+{
+    return left_ctrl_pressed || right_ctrl_pressed;
+}
+
+/**
+ * Determines whether a character can be mapped by the Control modifier.
+ *
+ * @param c Character to test; evaluated as an ASCII letter.
+ * @returns `true` if `c` is an ASCII letter `a`–`z` or `A`–`Z`, `false` otherwise.
+ */
+static bool is_control_mappable(char c)
+{
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Map an alphabetic character to its control-code equivalent; leave other characters unchanged.
+ *
+ * Converts lowercase `a`–`z` and uppercase `A`–`Z` to control codes 1–26 (`'a'` or `'A'` -> 1, `'b'` or `'B'` -> 2, ..., `'z'` or `'Z'` -> 26). Non-alphabetic characters are returned unchanged.
+ *
+ * @param c Character to map.
+ * @returns The control-code (`1`–`26`) for alphabetic input, or the original character for non-alphabetic input.
+ */
+static char apply_control_mapping(char c)
+{
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - 'a' + 1);
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 1);
+    }
+    return c;
+}
+
+/**
  * Set the active keyboard layout used for scancode-to-character translation.
  *
  * Updates the driver's internal layout selection so subsequent key reads use the
@@ -245,19 +290,112 @@ void keyboard_set_layout(enum keyboard_layout layout)
 }
 
 /**
- * Read the next translated character from the PS/2 keyboard.
+ * Process a PS/2 scancode (make or break), update keyboard modifier state,
+ * and produce a translated character when one is available.
  *
- * Polls the keyboard controller until a make code produces a mapped character,
- * handling extended (0xE0) sequences and updating modifier state (left/right
- * Shift, Caps Lock, AltGr) as scancodes are seen.
+ * Updates internal modifier state (left/right Shift, left/right Ctrl, Caps Lock,
+ * AltGr) according to the scancode and extended flag; recognizes extended
+ * sequences (0xE0) and maps certain extended keys.
  *
- * @returns The next character translated according to the current keyboard
- *          layout. */
-char keyboard_read_char(void)
+ * @param scancode Scancode byte from the PS/2 controller (high bit set for break codes).
+ * @param is_extended True if this scancode is part of a preceding 0xE0 extended sequence.
+ * @param out_char Pointer to a char where the translated character will be stored if produced.
+ * @returns `true` if a mapped character was produced and written to *out_char, `false` otherwise.
+ */
+static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *out_char)
 {
+    if (scancode & 0x80) {
+        uint8_t make_code = scancode & 0x7F;
+        if (make_code == 0x2A) {
+            left_shift_pressed = false;
+        } else if (make_code == 0x36) {
+            right_shift_pressed = false;
+        } else if (make_code == 0x38 && is_extended) {
+            alt_gr_active = false;
+        } else if (make_code == 0x1D) {
+            if (is_extended) {
+                right_ctrl_pressed = false;
+            } else {
+                left_ctrl_pressed = false;
+            }
+        }
+        return false;
+    }
+
+    if (is_extended) {
+        if (scancode == 0x38) {
+            alt_gr_active = true;
+            return false;
+        }
+
+        if (scancode == 0x1D) {
+            right_ctrl_pressed = true;
+            return false;
+        }
+
+        char extended = translate_extended_scancode(scancode);
+        if (extended) {
+            *out_char = extended;
+            return true;
+        }
+        return false;
+    }
+
+    if (scancode == 0x2A) {
+        left_shift_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x36) {
+        right_shift_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x1D) {
+        left_ctrl_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x38) {
+        return false;
+    }
+
+    if (scancode == 0x3A) {
+        caps_lock_active = !caps_lock_active;
+        return false;
+    }
+
+    char translated = translate_scancode(scancode);
+    if (!translated) {
+        return false;
+    }
+
+    if (control_modifier_active() && is_control_mappable(translated)) {
+        translated = apply_control_mapping(translated);
+    }
+
+    *out_char = translated;
+    return true;
+}
+
+/**
+ * Polls the PS/2 controller for a scancode sequence and, when a translated character is available, stores it.
+ *
+ * Processes make/break and extended scancode sequences and updates modifier state via keyboard_process_scancode.
+ * Does not block: returns immediately if no data is available from the controller.
+ *
+ * @param out_char Pointer to a char where the translated character will be stored; must not be NULL.
+ * @returns `true` if a mapped character was produced and written to `out_char`, `false` otherwise.
+ */
+bool keyboard_poll_char(char *out_char)
+{
+    if (!out_char) {
+        return false;
+    }
+
     for (;;) {
         if (!(inb(KEYBOARD_STATUS_PORT) & KEYBOARD_STATUS_OUT_BUFFER)) {
-            continue;
+            return false;
         }
 
         uint8_t scancode = inb(KEYBOARD_DATA_PORT);
@@ -273,53 +411,22 @@ char keyboard_read_char(void)
             extended_scancode_pending = false;
         }
 
-        if (scancode & 0x80) {
-            uint8_t make_code = scancode & 0x7F;
-            if (make_code == 0x2A) {
-                left_shift_pressed = false;
-            } else if (make_code == 0x36) {
-                right_shift_pressed = false;
-            } else if (make_code == 0x38 && is_extended) {
-                alt_gr_active = false;
-            }
-            continue;
-        }
-
-        if (is_extended) {
-            if (scancode == 0x38) {
-                alt_gr_active = true;
-                continue;
-            }
-
-            char extended = translate_extended_scancode(scancode);
-            if (extended) {
-                return extended;
-            }
-            continue;
-        }
-
-        if (scancode == 0x2A) {
-            left_shift_pressed = true;
-            continue;
-        }
-
-        if (scancode == 0x36) {
-            right_shift_pressed = true;
-            continue;
-        }
-
-        if (scancode == 0x38) {
-            continue;
-        }
-
-        if (scancode == 0x3A) {
-            caps_lock_active = !caps_lock_active;
-            continue;
-        }
-
-        char translated = translate_scancode(scancode);
-        if (translated) {
-            return translated;
+        if (keyboard_process_scancode(scancode, is_extended, out_char)) {
+            return true;
         }
     }
+}
+
+/**
+ * Read the next translated character from the keyboard, waiting until one is available.
+ *
+ * @returns The next translated character produced by the keyboard (respecting current layout and active modifiers).
+ */
+char keyboard_read_char(void)
+{
+    char result;
+    while (!keyboard_poll_char(&result)) {
+        continue;
+    }
+    return result;
 }

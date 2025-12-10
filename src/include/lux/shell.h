@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 struct shell_io {
@@ -17,6 +18,7 @@ struct shell_io {
 void shell_io_write(const struct shell_io *io, const char *data, size_t len);
 void shell_io_write_string(const struct shell_io *io, const char *str);
 void shell_io_putc(const struct shell_io *io, char c);
+bool shell_interrupt_poll(void);
 
 struct shell_command {
 	const char *name;

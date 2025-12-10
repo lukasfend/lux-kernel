@@ -42,15 +42,33 @@ static bool parse_u32(const char *text, uint32_t *value)
 }
 
 /**
- * Handle the "sleep" shell command to pause execution for a specified number of milliseconds.
+ * Waits for the given number of milliseconds, but returns early if a shell interrupt is detected.
  *
- * Validates that exactly one argument (milliseconds) is provided; writes a usage message to the shell I/O
- * if the argument count is incorrect. Parses argv[1] as an unsigned 32-bit millisecond value; writes an
- * error message to the shell I/O if parsing fails. On success, pauses execution for the parsed duration.
+ * @param duration Duration to wait in milliseconds.
+ * @returns `true` if the full duration elapsed without interruption, `false` if interrupted. 
+ */
+static bool sleep_interruptible(uint32_t duration)
+{
+    for (uint32_t elapsed = 0; elapsed < duration; ++elapsed) {
+        if (shell_interrupt_poll()) {
+            return false;
+        }
+        sleep_ms(1);
+    }
+
+    return true;
+}
+
+/**
+ * Handle the shell "sleep" command.
  *
- * @param argc Number of arguments in argv (including the command name).
- * @param argv Argument vector where argv[0] is the command name and argv[1] is the milliseconds value.
- * @param io   Shell I/O interface used to write usage or error messages.
+ * Parses a single argument as milliseconds, writes a usage message or an invalid-value
+ * error to the provided shell IO on failure, and pauses execution for the specified
+ * duration with interruptible behavior on success.
+ *
+ * @param argc Number of arguments passed to the command (expected 2: command and milliseconds).
+ * @param argv Argument vector; argv[1] is parsed as the millisecond duration.
+ * @param io    Shell IO interface used for writing usage and error messages.
  */
 static void sleep_handler(int argc, char **argv, const struct shell_io *io)
 {
@@ -65,7 +83,7 @@ static void sleep_handler(int argc, char **argv, const struct shell_io *io)
         return;
     }
 
-    sleep_ms(duration);
+    sleep_interruptible(duration);
 }
 
 const struct shell_command shell_command_sleep = {

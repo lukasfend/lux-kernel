@@ -14,6 +14,8 @@
 #define HISTORY_SIZE 16
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
+#define SHELL_CTRL_C 0x03
+#define TYPEAHEAD_CAPACITY INPUT_BUFFER_SIZE
 
 /**
  * Compute the length of a C string up to a maximum limit.
@@ -44,6 +46,18 @@ struct shell_pipe_buffer {
 static char history[HISTORY_SIZE][INPUT_BUFFER_SIZE];
 static size_t history_count;
 static size_t history_head;
+
+static char pending_keys[TYPEAHEAD_CAPACITY];
+static size_t pending_head;
+static size_t pending_tail;
+static size_t pending_count;
+static bool shell_interrupt_requested;
+static bool shell_interrupt_announced;
+
+static bool pending_input_push(char c);
+static bool pending_input_pop(char *c);
+static char read_char_with_pending(void);
+static void shell_interrupt_reset_state(void);
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
 
@@ -115,10 +129,10 @@ static void tty_writer(void *context, const char *data, size_t len)
 }
 
 /**
- * Write a buffer to the provided shell IO writer.
+ * Write bytes to a shell IO writer by invoking its write callback.
  *
- * Invokes the `io->write` callback with `io->context`, `data`, and `len`.
- * No action is taken if `io` is NULL, `io->write` is NULL, `data` is NULL, or `len` is zero.
+ * Polls for pending interrupts before calling `io->write`. Does nothing if
+ * `io` is NULL, `io->write` is NULL, `data` is NULL, or `len` is zero.
  *
  * @param io   Shell IO descriptor containing the write callback and context.
  * @param data Pointer to the bytes to write.
@@ -126,6 +140,7 @@ static void tty_writer(void *context, const char *data, size_t len)
  */
 void shell_io_write(const struct shell_io *io, const char *data, size_t len)
 {
+    shell_interrupt_poll();
     if (!io || !io->write || !data || !len) {
         return;
     }
@@ -133,13 +148,16 @@ void shell_io_write(const struct shell_io *io, const char *data, size_t len)
 }
 
 /**
- * Write a single character to the specified shell IO destination.
+ * Write a single character to the specified shell IO destination after polling for interrupts.
  *
- * @param io Destination IO context used to perform the write.
+ * Polls for pending keyboard events (including Ctrl-C) before invoking the IO write callback.
+ *
+ * @param io Destination IO descriptor whose write callback will be invoked.
  * @param c  Character to write.
  */
 void shell_io_putc(const struct shell_io *io, char c)
 {
+    shell_interrupt_poll();
     shell_io_write(io, &c, 1u);
 }
 
@@ -157,6 +175,34 @@ void shell_io_write_string(const struct shell_io *io, const char *str)
         return;
     }
     shell_io_write(io, str, strlen(str));
+}
+
+/**
+ * Poll the keyboard for pending characters and record a Ctrl-C interrupt.
+ *
+ * Enqueues non-Ctrl characters into the typeahead pending buffer. When a Ctrl-C
+ * is detected, records that an interrupt was requested and (the first time)
+ * writes a visible "^C" line to the TTY.
+ *
+ * @returns `true` if a Ctrl-C interrupt has been requested, `false` otherwise.
+ */
+bool shell_interrupt_poll(void)
+{
+    char c;
+    while (keyboard_poll_char(&c)) {
+        if ((unsigned char)c == (unsigned char)SHELL_CTRL_C) {
+            shell_interrupt_requested = true;
+        } else {
+            pending_input_push(c);
+        }
+    }
+
+    if (shell_interrupt_requested && !shell_interrupt_announced) {
+        tty_write_string("^C\n");
+        shell_interrupt_announced = true;
+    }
+
+    return shell_interrupt_requested;
 }
 
 /**
@@ -214,6 +260,72 @@ static const char *history_get(size_t offset)
     }
     size_t index = (history_head + HISTORY_SIZE - 1u - offset) % HISTORY_SIZE;
     return history[index];
+}
+
+/**
+ * Enqueue a single character into the typeahead (pending) input buffer.
+ *
+ * @param c Character to enqueue.
+ * @returns `true` if the character was added to the buffer, `false` if the buffer is full.
+ */
+static bool pending_input_push(char c)
+{
+    if (pending_count >= TYPEAHEAD_CAPACITY) {
+        return false;
+    }
+
+    pending_keys[pending_head] = c;
+    pending_head = (pending_head + 1u) % TYPEAHEAD_CAPACITY;
+    ++pending_count;
+    return true;
+}
+
+/**
+ * Remove and optionally retrieve the oldest pending input character from the typeahead buffer.
+ *
+ * @param c If non-NULL, receives the popped character; if NULL the character is consumed and discarded.
+ * @returns `true` if a character was popped, `false` if the pending buffer was empty.
+ */
+static bool pending_input_pop(char *c)
+{
+    if (!pending_count) {
+        return false;
+    }
+
+    if (c) {
+        *c = pending_keys[pending_tail];
+    }
+
+    pending_tail = (pending_tail + 1u) % TYPEAHEAD_CAPACITY;
+    --pending_count;
+    return true;
+}
+
+/**
+ * Retrieve the next available input character, using any queued (pending) input first.
+ *
+ * @returns The next input character: a character taken from the pending input queue if one is available,
+ *          otherwise the next character returned by the keyboard input routine.
+ */
+static char read_char_with_pending(void)
+{
+    char buffered;
+    if (pending_input_pop(&buffered)) {
+        return buffered;
+    }
+    return keyboard_read_char();
+}
+
+/**
+ * Reset the shell's interrupt state so subsequent operations proceed without a pending Ctrl-C.
+ *
+ * Clears the internal flags that indicate an interrupt was requested and whether the interrupt
+ * has been announced to the user (`shell_interrupt_requested` and `shell_interrupt_announced`).
+ */
+static void shell_interrupt_reset_state(void)
+{
+    shell_interrupt_requested = false;
+    shell_interrupt_announced = false;
 }
 
 /**
@@ -473,17 +585,18 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 }
 
 /**
- * Read an interactive input line into a provided buffer with line-editing, history navigation, and tab completion.
+ * Read a single edited input line from the keyboard into the provided buffer.
  *
- * Reads characters from the keyboard, echoes edits to the terminal, supports backspace, up/down history recall,
- * tab completion using the supplied command list, ignores carriage returns, and finishes when a newline is entered
- * or the buffer capacity is reached.
+ * Supports in-line editing, backspace, history navigation (up/down), tab completion using
+ * `commands` (may be NULL), and finishes when a newline is entered or the buffer capacity
+ * is reached. Carriage returns ('\r') are ignored.
  *
- * @param buffer Destination buffer where the entered line will be stored; the result is NUL-terminated.
+ * @param buffer Destination buffer for the entered line; the result is NUL-terminated.
  * @param capacity Maximum size of `buffer` in bytes, including the terminating NUL.
- * @param commands Array of pointers to available commands used for tab-completion (may be NULL if none).
+ * @param commands Array of pointers to available commands used for tab-completion (may be NULL).
  * @param command_count Number of entries in `commands`.
- * @returns The length of the entered line in bytes, not counting the terminating NUL. */
+ * @returns The length of the entered line in bytes, not counting the terminating NUL. Returns `0`
+ *          when input was interrupted by Ctrl-C (the buffer will be an empty string). */
 static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
@@ -492,9 +605,18 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
     char saved_current[INPUT_BUFFER_SIZE];
 
     while (len + 1 < capacity) {
-        char c = keyboard_read_char();
+        char c = read_char_with_pending();
         if (!c) {
             continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)SHELL_CTRL_C) {
+            tty_write_string("^C\n");
+            buffer[0] = '\0';
+            len = 0;
+            history_offset = -1;
+            saved_current_valid = false;
+            return 0;
         }
 
         if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_UP) {
@@ -745,6 +867,10 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
 
         cmd->handler(argc, argv_local, &io);
 
+        if (shell_interrupt_poll()) {
+            return false;
+        }
+
         if (has_next) {
             pipe_storage_len = pipe_buffer.length;
             memcpy(pipe_storage, pipe_buffer.data, pipe_storage_len + 1u);
@@ -784,6 +910,7 @@ void shell_run(void)
     tty_write_string("Type 'help' for a list of commands.\n");
 
     for (;;) {
+        shell_interrupt_reset_state();
         prompt();
         size_t len = read_line(buffer, sizeof(buffer), commands, command_count);
         if (!len) {

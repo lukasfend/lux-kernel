@@ -3,6 +3,10 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: Kernel entry point that initializes the TTY and launches the shell.
  */
+#include <stdbool.h>
+
+#include <lux/ata.h>
+#include <lux/fs.h>
 #include <lux/memory.h>
 #include <lux/shell.h>
 #include <lux/tty.h>
@@ -27,6 +31,15 @@ void kernel(void)
 {
     heap_init();
     tty_init(0x1F);
+
+    if (!ata_pio_init()) {
+        tty_write_string("[disk] ATA PIO init failed; filesystem disabled.\n");
+    } else if (!fs_mount()) {
+        tty_write_string("[disk] Filesystem mount failed; continuing without storage.\n");
+    } else {
+        tty_write_string("[disk] Filesystem mounted successfully.\n");
+    }
+
     banner();
     shell_run();
 

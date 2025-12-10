@@ -13,6 +13,9 @@ A tiny 32-bit hobby operating system that boots under QEMU. It contains a BIOS b
 - **Drivers**
   - `src/kernel/drivers/video/tty.c`: VGA text console with scrolling/backspace + hardware cursor updates.
   - `src/kernel/drivers/input/keyboard.c`: Polled PS/2 keyboard reader (Set 1 scancodes).
+- **Storage**
+  - `src/kernel/drivers/storage/ata_pio.c`: 28-bit LBA ATA PIO block driver for the primary disk.
+  - `src/kernel/fs/fs.c`: Simple Unix-like filesystem mounted from disk (starts at LBA 2048, 2 MiB footprint).
 - **C runtime helpers** (`src/kernel/lib/string.c`): Basic `mem*`, `str*`, `strcmp`.
 - **Shell** (`src/kernel/shell/shell.c`): Prompt, line editing, built-in `help` and `echo` commands.
 - **Headers** (`src/include/`): Minimal replacements for `stddef.h`, `stdint.h`, etc., plus OS-specific headers in `src/include/lux/`.
@@ -121,10 +124,15 @@ Press `Ctrl+C` in the host terminal to stop QEMU.
 4. `make` automatically compiles the file—no need to edit the Makefile.
 
 ### Add shell commands
-- Edit `src/kernel/shell/shell.c`:
-  1. Write a handler function (`static void cmd_name(int argc, char **argv)`).
-  2. Append an entry to the `commands[]` table.
-  3. Rebuild. The new command appears in `help` automatically.
+1. Create a file under `src/kernel/shell/commands/` that defines a `const struct shell_command` (see `ls.c`, `cat.c`, or `touch.c`).
+2. Declare the new symbol in `src/kernel/shell/command_table.c` and append it to the `builtin[]` table.
+3. Use the `shell_io_*` helpers to read pipeline input or emit output; the REPL wires everything up automatically.
+
+### Filesystem + storage
+- On boot the kernel initializes the ATA PIO driver and mounts a 2&nbsp;MiB filesystem that lives at LBA 2048 on the boot disk image. The first mount formats the region if no superblock is found.
+- Use `ls [path]` to inspect directories and `cat <path>` to read files (multiple arguments supported). Paths are simple Unix-style strings rooted at `/`.
+- `touch <path>` creates files; if you pipe data into the command (e.g. `echo hi | touch /foo.txt`) the data overwrites the file contents.
+- All metadata lives on disk, so files persist between emulator runs as long as you keep `bin/os.bin`.
 
 ### Support other architectures
 - Add another directory under `src/arch/<arch-name>/` with its own bootloader, entry stub, and linker script.
@@ -149,6 +157,10 @@ Press `Ctrl+C` in the host terminal to stop QEMU.
 - Add paging (identity-map first megabytes, then map kernel higher).
 - Write a basic memory allocator and expose libc-like helpers.
 - Replace the polled keyboard with interrupt-driven input.
-- Expand the shell with filesystem-style commands once storage drivers exist.
+- Flesh out the filesystem (subdirectories, deletion, caching) and grow the shell with tools like `rm`, `mkdir`, and redirection.
 
 Have fun hacking on lux-kernel! If you get stuck, re-read the sections above—they walk through every moving part of the current system.
+
+## TODOS:
+* Fix shell interrupts being handled in he command executors - use a global system instead
+* Optimize for usage visually - using a 640x480 display with at least 16 colors.
