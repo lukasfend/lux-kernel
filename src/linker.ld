@@ -1,26 +1,29 @@
 ENTRY(_start)
-OUTPUT_FORMAT(binary)
+OUTPUT_FORMAT(elf32-i386)
+OUTPUT_ARCH(i386)
+
 SECTIONS
 {
-    . = 1M;
-    .text :
+    . = 0x0010000;
+
+    .text : ALIGN(16)
     {
-        *(.text)
+        *(.text*)
     }
 
-    .rodata :
+    .rodata : ALIGN(16)
     {
-        *(.rodata)
+        *(.rodata*)
     }
 
-    .data :
+    .data : ALIGN(16)
     {
-        *(.data)
+        *(.data*)
     }
 
-    .bss :
+    .bss : ALIGN(16)
     {
         *(COMMON)
-        *(.bss)
+        *(.bss*)
     }
 }
