@@ -7,12 +7,22 @@
 #include <lux/shell.h>
 #include <lux/tty.h>
 
+/**
+ * Display the kernel banner on the primary TTY.
+ *
+ * Writes the fixed banner text "lux-kernel\n" to the configured terminal output.
+ */
 static void banner(void)
 {
     tty_write_string("lux-kernel\n");
-    tty_write_string("Runtime primitives online.\n");
 }
 
+/**
+ * Initialize core subsystems, start the interactive shell, and enter an idle halt loop.
+ *
+ * Performs early kernel setup (heap and TTY), displays the kernel banner, launches the shell,
+ * and if the shell ever returns, halts the CPU in an infinite idle loop.
+ */
 void kernel(void)
 {
     heap_init();

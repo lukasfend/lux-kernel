@@ -5,4 +5,14 @@
  */
 #pragma once
 
+#include <stddef.h>
+
+struct shell_command {
+	const char *name;
+	const char *help;
+	void (*handler)(int argc, char **argv);
+};
+
+const struct shell_command *const *shell_builtin_commands(size_t *count);
+
 void shell_run(void);
