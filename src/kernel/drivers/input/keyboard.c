@@ -1,5 +1,5 @@
-#include <keyboard.h>
-#include <io.h>
+#include <lux/keyboard.h>
+#include <lux/io.h>
 #include <stdint.h>
 
 static const char scancode_set1[128] = {

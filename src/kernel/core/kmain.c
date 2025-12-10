@@ -1,5 +1,5 @@
-#include <shell.h>
-#include <tty.h>
+#include <lux/shell.h>
+#include <lux/tty.h>
 
 static void banner(void)
 {

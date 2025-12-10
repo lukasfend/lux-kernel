@@ -1,7 +1,7 @@
-#include <keyboard.h>
-#include <shell.h>
+#include <lux/keyboard.h>
+#include <lux/shell.h>
 #include <string.h>
-#include <tty.h>
+#include <lux/tty.h>
 
 #define INPUT_BUFFER_SIZE 128
 #define MAX_ARGS 8

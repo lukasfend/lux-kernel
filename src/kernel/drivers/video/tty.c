@@ -1,6 +1,6 @@
-#include <io.h>
+#include <lux/io.h>
 #include <string.h>
-#include <tty.h>
+#include <lux/tty.h>
 
 static volatile uint16_t *const VGA_MEMORY = (uint16_t *)0xB8000;
 static const size_t VGA_WIDTH = 80;
