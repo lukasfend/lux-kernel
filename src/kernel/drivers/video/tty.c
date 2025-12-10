@@ -10,7 +10,7 @@
 #include <lux/io.h>
 #include <lux/tty.h>
 
-#include "font8x8_basic.h"
+#include "font_ibm_vga_8x16.h"
 
 #define SCREEN_WIDTH           640u
 #define SCREEN_HEIGHT          480u
@@ -73,12 +73,20 @@ static inline void vga_clear_screen(void)
     memset((void *)VGA_MEMORY, 0x00, VGA_MEMORY_SIZE);
 }
 
+static inline uint8_t bit_reverse(uint8_t value)
+{
+    value = (uint8_t)(((value & 0x55u) << 1) | ((value & 0xAAu) >> 1));
+    value = (uint8_t)(((value & 0x33u) << 2) | ((value & 0xCCu) >> 2));
+    return (uint8_t)((value << 4) | (value >> 4));
+}
+
 static uint8_t glyph_row_bits(uint8_t ch, size_t scanline)
 {
-    if (ch >= 128) {
-        ch = '?';
+    if (scanline >= CELL_HEIGHT) {
+        return 0;
     }
-    return font8x8_basic[ch][scanline / 2u];
+    /* IBM VGA font bytes store pixels MSB->LSB, so flip to match our renderer. */
+    return bit_reverse(font_ibm_vga_8x16[ch][scanline]);
 }
 
 static void vga_flush_cell(size_t base_x, size_t base_y)
@@ -120,10 +128,7 @@ static void tty_draw_glyph(size_t row, size_t col)
     struct tty_cell cell = cells[idx];
     uint8_t fg = cell.color & 0x0F;
     uint8_t bg = (cell.color >> 4) & 0x0F;
-    uint8_t ch = cell.character ? (uint8_t)cell.character : ' ';
-    if (ch >= 128) {
-        ch = '?';
-    }
+    uint8_t ch = cell.character ? (uint8_t)cell.character : (uint8_t)' ';
 
     size_t base_x = col * CELL_WIDTH;
     size_t base_y = row * CELL_HEIGHT;
