@@ -10,19 +10,8 @@ times 33 db 0
 start:
     jmp 0x7C0:step2
 
-handle_zero:
-    mov ah, 0Eh
-    mov al, 'A'
-    mov bx, 0x00
-    int 0x10
-    iret
 
-handle_one:
-    mov ah, 0Eh
-    mov al, 'V'
-    mov bx, 0x00
-    int 0x10
-    iret
+
 
 step2:
     cli ; Clear interrupts
@@ -37,20 +26,22 @@ step2:
     ; Set interrupt vector table; stack segment -> assign interrupt logic
     ; Exceptions: https://wiki.osdev.org/Exceptions 
     ; Interrupt 0
-    mov word[ss:0x00], handle_zero
-    mov word[ss:0x02], 0x7C0
+    mov ah, 2 ; Read sector
+    mov al, 1 ; 1 Sector to read
+    mov ch, 0 ; Cylinder number
+    mov cl, 2 ; read sector 2
+    mov dh, 0 ; Head number
+    mov bx, buffer
+    int 0x13 ; Invoke read command
+    
+    jc error ; jump-carry to error lbl
 
-    ; Interrupt 1
-    mov word[ss:0x04], handle_one
-    mov word[ss:0x06], 0x7C0
-
-    mov ax, 0x00
-    div ax
-
-    mov si, message
-    call print
     jmp $ ; HALT
 
+error:
+    mov si, error_message
+    call print
+    jmp $
 
 print:
     mov bx, 0
@@ -68,7 +59,10 @@ print_char:
     int 0x10 ; Interrupts: https://www.ctyme.com/intr/int.htm
     ret
 
-message: db 'debug test 123', 0
+error_message: db 'Failed to load sector', 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
+
+; Empty buffer to be written to
+buffer:

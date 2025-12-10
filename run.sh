@@ -1,2 +1,2 @@
-nasm -f bin ./boot.asm -o ./build/boot.bin
+make
 qemu-system-x86_64 -hda ./build/boot.bin
