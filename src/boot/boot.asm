@@ -14,8 +14,6 @@ start:
     jmp 0x00:step2
 
 
-
-
 step2:
     cli ; Clear interrupts
     mov ax, 0x00
@@ -75,6 +73,13 @@ load32:
     mov ss, ax
     mov ebp, 0x00200000
     mov esp, ebp
+
+    ; Enable A20
+    in al, 0x92
+    or al, 2
+    out 0x92, al
+
+
     jmp $
 
 error_message: db 'Failed to load sector', 0

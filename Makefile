@@ -1,4 +1,5 @@
 all:
-	nasm -f bin ./boot.asm -o ./build/boot.bin
-	dd if=./message.txt >> ./build/boot.bin
-	dd if=/dev/zero bs=512 count=1 >> ./build/boot.bin
+	nasm -f bin ./src/boot/boot.asm -o ./bin/boot.bin
+
+clean:
+	rm -rf ./bin/boot.bin
