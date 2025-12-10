@@ -125,3 +125,13 @@ void tty_write_string(const char *str)
 {
     tty_write(str, strlen(str));
 }
+
+void tty_clear(void) {
+    cursor_row = 0;
+    cursor_col = 0;
+    uint16_t blank = make_entry(' ');
+    for(size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
+        VGA_MEMORY[i] = blank;
+    }
+    tty_sync_cursor();
+}
