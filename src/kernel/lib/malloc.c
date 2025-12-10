@@ -150,6 +150,13 @@ void free(void *ptr)
     coalesce(block);
 }
 
+/**
+ * Allocate and zero-initialize an array of `count` elements each of `size` bytes.
+ *
+ * @param count Number of elements to allocate.
+ * @param size  Size in bytes of each element.
+ * @returns Pointer to the allocated, zeroed memory on success; `NULL` if `count` or `size` is zero, if `count * size` would overflow, or if allocation fails.
+ */
 void *calloc(size_t count, size_t size)
 {
     if (!count || !size) {
@@ -168,4 +175,69 @@ void *calloc(size_t count, size_t size)
 
     memset(ptr, 0, total);
     return ptr;
+}
+
+/**
+ * Populate heap usage statistics for the kernel heap.
+ *
+ * Fills the provided heap_stats structure with:
+ * - total_bytes: total payload bytes available in the heap
+ * - used_bytes: sum of payload bytes in allocated blocks
+ * - free_bytes: sum of payload bytes in free blocks
+ * - largest_free_block: size of the largest free payload block
+ * - allocation_count: number of allocated blocks
+ * - free_block_count: number of free blocks
+ *
+ * If the heap is not initialized, the function returns baseline values that represent
+ * a single free block spanning the entire heap payload.
+ *
+ * @param stats Pointer to a heap_stats structure to populate; must not be NULL.
+ * @returns true on success, false if `stats` is NULL.
+ */
+bool heap_get_stats(struct heap_stats *stats)
+{
+    if (!stats) {
+        return false;
+    }
+
+    size_t total_payload = KERNEL_HEAP_SIZE - sizeof(block_header_t);
+
+    if (!heap_ready || !heap_head) {
+        stats->total_bytes = total_payload;
+        stats->used_bytes = 0;
+        stats->free_bytes = total_payload;
+        stats->largest_free_block = total_payload;
+        stats->allocation_count = 0;
+        stats->free_block_count = 1;
+        return true;
+    }
+
+    size_t used = 0;
+    size_t free = 0;
+    size_t largest_free = 0;
+    size_t allocated_blocks = 0;
+    size_t free_blocks = 0;
+
+    block_header_t *current = heap_head;
+    while (current) {
+        if (current->free) {
+            free += current->size;
+            ++free_blocks;
+            if (current->size > largest_free) {
+                largest_free = current->size;
+            }
+        } else {
+            used += current->size;
+            ++allocated_blocks;
+        }
+        current = current->next;
+    }
+
+    stats->total_bytes = total_payload;
+    stats->used_bytes = used;
+    stats->free_bytes = free;
+    stats->largest_free_block = largest_free;
+    stats->allocation_count = allocated_blocks;
+    stats->free_block_count = free_blocks;
+    return true;
 }

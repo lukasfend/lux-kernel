@@ -7,10 +7,21 @@
 
 #include <stddef.h>
 
+struct shell_io {
+	const char *input;
+	size_t input_len;
+	void (*write)(void *context, const char *data, size_t len);
+	void *context;
+};
+
+void shell_io_write(const struct shell_io *io, const char *data, size_t len);
+void shell_io_write_string(const struct shell_io *io, const char *str);
+void shell_io_putc(const struct shell_io *io, char c);
+
 struct shell_command {
 	const char *name;
 	const char *help;
-	void (*handler)(int argc, char **argv);
+	void (*handler)(int argc, char **argv, const struct shell_io *io);
 };
 
 const struct shell_command *const *shell_builtin_commands(size_t *count);

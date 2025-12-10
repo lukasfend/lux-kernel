@@ -8,16 +8,18 @@
 #include <lux/tty.h>
 
 /**
- * Handle the "clear" shell command by clearing the terminal buffer.
+ * Clear the terminal buffer for the "clear" shell command.
  *
- * This command ignores any arguments.
+ * This command ignores any provided arguments and I/O context.
  *
  * @param argc Number of arguments (ignored).
  * @param argv Argument array (ignored).
+ * @param io Shell I/O interface (ignored).
  */
-static void clear_handler(int argc, char **argv) {
+static void clear_handler(int argc, char **argv, const struct shell_io *io) {
     (void)argc;
     (void)argv;
+    (void)io;
     tty_clear();
 }
 

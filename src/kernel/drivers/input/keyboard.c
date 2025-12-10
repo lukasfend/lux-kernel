@@ -16,6 +16,7 @@
 struct keyboard_layout_map {
     const char normal[KEYBOARD_MAP_SIZE];
     const char shifted[KEYBOARD_MAP_SIZE];
+    const char altgr[KEYBOARD_MAP_SIZE];
 };
 
 static const struct keyboard_layout_map layout_en_us = {
@@ -50,6 +51,24 @@ static const struct keyboard_layout_map layout_en_us = {
         0, 0, 0, 0, 0, 0, 0, '7', '8', '9', '-', '4', '5', '6', '+', '1',
         /* 0x50 - 0x5F */
         '2', '3', '0', '.', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x60 - 0x6F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x70 - 0x7F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    },
+    .altgr = {
+        /* 0x00 - 0x0F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x10 - 0x1F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x20 - 0x2F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x30 - 0x3F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x40 - 0x4F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x50 - 0x5F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x60 - 0x6F */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x70 - 0x7F */
@@ -93,6 +112,24 @@ static const struct keyboard_layout_map layout_de_de = {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x70 - 0x7F */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    },
+    .altgr = {
+        /* 0x00 - 0x0F */
+        0, 0, 0, '\xB2', '\xB3', 0, 0, 0, '{', '[', ']', '}', '\\', 0, 0, 0,
+        /* 0x10 - 0x1F */
+        '@', 0, '\x80', /* € */ 0, 0, 0, 0, 0, 0, 0, 0, '~', 0, 0, 0, 0,
+        /* 0x20 - 0x2F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x30 - 0x3F */
+        0, 0, '\xB5', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x40 - 0x4F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x50 - 0x5F */
+        0, 0, 0, 0, 0, 0, '|', 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x60 - 0x6F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x70 - 0x7F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     }
 };
 
@@ -102,7 +139,13 @@ static bool left_shift_pressed;
 static bool right_shift_pressed;
 static bool caps_lock_active;
 static bool extended_scancode_pending;
+static bool alt_gr_active;
 
+/**
+ * Determine whether a character is an ASCII letter or one of the supported German umlaut letters (ä, Ä, ö, Ö, ü, Ü).
+ * @param c Character to test.
+ * @returns `true` if `c` is in `a`–`z`, `A`–`Z`, or one of the specified umlaut characters; `false` otherwise.
+ */
 static bool is_letter_char(char c)
 {
     if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
@@ -122,6 +165,16 @@ static bool is_letter_char(char c)
     }
 }
 
+/**
+ * Translate a PS/2 scancode into the corresponding character for the active layout.
+ *
+ * Chooses the AltGr mapping when AltGr is active and an AltGr entry exists; otherwise
+ * applies Caps Lock and Shift semantics for letters and selects the shifted mapping
+ * if shift is effectively active and available, falling back to the normal mapping.
+ *
+ * @param scancode Scancode value (index into the current layout maps); values >= KEYBOARD_MAP_SIZE produce no mapping.
+ * @returns The mapped character for the scancode, or `0` if the scancode is out of range or unmapped.
+ */
 static char translate_scancode(uint8_t scancode)
 {
     if (scancode >= KEYBOARD_MAP_SIZE) {
@@ -131,9 +184,14 @@ static char translate_scancode(uint8_t scancode)
     const struct keyboard_layout_map *layout = current_layout;
     char normal = layout->normal[scancode];
     char shifted = layout->shifted[scancode];
+    char altgr = layout->altgr[scancode];
     bool is_letter = is_letter_char(normal);
     bool shift_active = left_shift_pressed || right_shift_pressed;
     bool use_shifted = shift_active;
+
+    if (alt_gr_active && altgr) {
+        return altgr;
+    }
 
     if (caps_lock_active && is_letter) {
         use_shifted = !use_shifted;
@@ -146,6 +204,33 @@ static char translate_scancode(uint8_t scancode)
     return normal;
 }
 
+/**
+ * Translate an extended (0xE0-prefixed) PS/2 scancode to a special key value.
+ *
+ * @param scancode Scancode byte that follows the 0xE0 prefix.
+ * @returns `KEYBOARD_KEY_ARROW_UP` for 0x48, `KEYBOARD_KEY_ARROW_DOWN` for 0x50, `0` for unrecognized extended scancodes.
+ */
+static char translate_extended_scancode(uint8_t scancode)
+{
+    switch (scancode) {
+    case 0x48:
+        return KEYBOARD_KEY_ARROW_UP;
+    case 0x50:
+        return KEYBOARD_KEY_ARROW_DOWN;
+    default:
+        return 0;
+    }
+}
+
+/**
+ * Set the active keyboard layout used for scancode-to-character translation.
+ *
+ * Updates the driver's internal layout selection so subsequent key reads use the
+ * specified mapping. Unknown or unsupported `layout` values default to the
+ * US English layout.
+ *
+ * @param layout Enum value selecting the keyboard layout to activate.
+ */
 void keyboard_set_layout(enum keyboard_layout layout)
 {
     switch (layout) {
@@ -159,6 +244,15 @@ void keyboard_set_layout(enum keyboard_layout layout)
     }
 }
 
+/**
+ * Read the next translated character from the PS/2 keyboard.
+ *
+ * Polls the keyboard controller until a make code produces a mapped character,
+ * handling extended (0xE0) sequences and updating modifier state (left/right
+ * Shift, Caps Lock, AltGr) as scancodes are seen.
+ *
+ * @returns The next character translated according to the current keyboard
+ *          layout. */
 char keyboard_read_char(void)
 {
     for (;;) {
@@ -173,9 +267,10 @@ char keyboard_read_char(void)
             continue;
         }
 
+        bool is_extended = false;
         if (extended_scancode_pending) {
+            is_extended = true;
             extended_scancode_pending = false;
-            continue;
         }
 
         if (scancode & 0x80) {
@@ -184,6 +279,21 @@ char keyboard_read_char(void)
                 left_shift_pressed = false;
             } else if (make_code == 0x36) {
                 right_shift_pressed = false;
+            } else if (make_code == 0x38 && is_extended) {
+                alt_gr_active = false;
+            }
+            continue;
+        }
+
+        if (is_extended) {
+            if (scancode == 0x38) {
+                alt_gr_active = true;
+                continue;
+            }
+
+            char extended = translate_extended_scancode(scancode);
+            if (extended) {
+                return extended;
             }
             continue;
         }
@@ -195,6 +305,10 @@ char keyboard_read_char(void)
 
         if (scancode == 0x36) {
             right_shift_pressed = true;
+            continue;
+        }
+
+        if (scancode == 0x38) {
             continue;
         }
 

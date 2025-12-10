@@ -5,10 +5,11 @@
  */
 
 #include <lux/shell.h>
+#include <lux/time.h>
 #include <lux/tty.h>
 
 #define NOISE_FRAMES 300U
-#define NOISE_DELAY_ITER 200000U
+#define NOISE_FRAME_DELAY_MS 25U
 
 /**
  * Advance the internal pseudo-random generator and return the next value.
@@ -25,15 +26,12 @@ static uint32_t noise_rand(void) {
 }
 
 /**
- * Introduces a short busy-wait delay by looping NOISE_DELAY_ITER times.
+ * Delay execution for the configured frame interval.
  *
- * The loop executes a processor `pause` instruction each iteration to reduce
- * CPU pipeline/branch effects while waiting.
+ * Uses NOISE_FRAME_DELAY_MS to determine the delay duration in milliseconds.
  */
 static void noise_delay(void) {
-    for(volatile uint32_t i = 0; i < NOISE_DELAY_ITER; ++i) {
-        __asm__ volatile("pause");
-    }
+    sleep_ms(NOISE_FRAME_DELAY_MS);
 }
 
 /**
@@ -46,13 +44,13 @@ static void noise_delay(void) {
 static void draw_noise_frame(void)
 {
     static const uint8_t palette[] = {
-        (0x0u << 4) | 0xF, /* white on black */
-        (0x0u << 4) | 0x7, /* light gray on black */
-        (0x8u << 4) | 0xF, /* white on dark gray */
-        (0x7u << 4) | 0x0, /* black on light gray */
-        (0x8u << 4) | 0x7, /* light gray on dark gray */
+        (0x0u << 4) | 0xA, /* light green on black */
+        (0x0u << 4) | 0x2, /* green on black */
+        (0x2u << 4) | 0xA, /* light green on green */
+        (0xAu << 4) | 0x0, /* black on light green */
+        (0x2u << 4) | 0x0, /* black on green */
     };
-    static const char glyphs[] = { '#', ' ' };
+    static const char glyphs[] = { '1','2','3','4','5','6','7','8','9' };
 
     const size_t rows = tty_rows();
     const size_t cols = tty_cols();
@@ -74,7 +72,7 @@ static void draw_noise_frame(void)
  * Clears the terminal, repeatedly draws a sequence of noise frames with
  * inter-frame delays, then clears the terminal and writes "Noise done.".
  */
-static void noise_handler(int argc, char **argv) {
+static void noise_handler(int argc, char **argv, const struct shell_io *io) {
     (void)argc;
     (void)argv;
     tty_clear();
@@ -84,7 +82,7 @@ static void noise_handler(int argc, char **argv) {
         noise_delay(); 
     }
     tty_clear();
-    tty_write_string("Noise done.\n");
+    shell_io_write_string(io, "Noise done.\n");
 }
 
 const struct shell_command shell_command_noise = {

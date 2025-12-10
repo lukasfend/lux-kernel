@@ -1,17 +1,16 @@
 #include <lux/shell.h>
-#include <lux/tty.h>
 
 /**
- * Print a formatted list of built-in shell commands to the TTY.
+ * Display the list of built-in shell commands and their help text using the provided IO.
  *
- * Obtains the list of registered built-in commands and writes a header
- * "Available commands:" followed by each command's name and help text on
- * its own line.
+ * Writes a header "Available commands:" followed by each command name and its help
+ * text on a separate line to the given shell IO implementation.
  *
- * @param argc Unused command argument count.
- * @param argv Unused command argument vector.
+ * @param argc Ignored.
+ * @param argv Ignored.
+ * @param io IO interface used to emit the header and command entries.
  */
-static void help_handler(int argc, char **argv)
+static void help_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
     (void)argv;
@@ -19,13 +18,13 @@ static void help_handler(int argc, char **argv)
     size_t count = 0;
     const struct shell_command *const *commands = shell_builtin_commands(&count);
 
-    tty_write_string("Available commands:\n");
+    shell_io_write_string(io, "Available commands:\n");
     for (size_t i = 0; i < count; ++i) {
-        tty_write_string("  ");
-        tty_write_string(commands[i]->name);
-        tty_write_string(" - ");
-        tty_write_string(commands[i]->help);
-        tty_putc('\n');
+        shell_io_write_string(io, "  ");
+        shell_io_write_string(io, commands[i]->name);
+        shell_io_write_string(io, " - ");
+        shell_io_write_string(io, commands[i]->help);
+        shell_io_putc(io, '\n');
     }
 }
 
