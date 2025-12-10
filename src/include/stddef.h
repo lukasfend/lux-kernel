@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: Core size, pointer difference, and alignment typedefs.
+ */
 #pragma once
 
 typedef unsigned int size_t;

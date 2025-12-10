@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: VGA text-mode terminal implementation with scrolling and cursor management.
+ */
 #include <lux/io.h>
 #include <string.h>
 #include <lux/tty.h>

@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: Basic implementations of freestanding memory and string routines.
+ */
 #include <string.h>
 
 void *memset(void *dst, int value, size_t len)

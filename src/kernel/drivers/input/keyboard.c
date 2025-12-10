@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: PS/2 keyboard driver that polls scancodes and returns characters.
+ */
 #include <lux/keyboard.h>
 #include <lux/io.h>
 #include <stdint.h>

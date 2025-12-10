@@ -10,7 +10,7 @@ CC      := $(TARGET)-gcc
 LD      := $(TARGET)-ld
 OBJCOPY := $(TARGET)-objcopy
 
-INCLUDE_DIRS := include
+INCLUDE_DIRS := src/include
 
 CFLAGS  := -ffreestanding -fno-builtin -fno-stack-protector -nostdlib -nostdinc -m32 -fno-pie -O2 -Wall -Wextra -std=gnu99 $(addprefix -I,$(INCLUDE_DIRS))
 LDFLAGS := -nostdlib -n

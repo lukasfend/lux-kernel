@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: Minimal interactive shell handling input, parsing, and built-ins.
+ */
 #include <lux/keyboard.h>
 #include <lux/shell.h>
 #include <string.h>

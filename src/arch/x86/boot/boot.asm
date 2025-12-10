@@ -1,3 +1,8 @@
+; =============================================
+; Date: 2025-12-10 00:00 UTC
+; Author: Lukas Fend <lukas.fend@outlook.com>
+; Description: Boot sector that loads the kernel and jumps to protected mode.
+; =============================================
 ORG 0x7C00
 BITS 16
 

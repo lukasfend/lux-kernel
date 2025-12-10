@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: Inline port I/O utilities for interacting with hardware.
+ */
 #pragma once
 
 #include <stdint.h>

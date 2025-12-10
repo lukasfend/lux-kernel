@@ -1,3 +1,8 @@
+/*
+ * Date: 2025-12-10 00:00 UTC
+ * Author: Lukas Fend <lukas.fend@outlook.com>
+ * Description: Declarations for freestanding memory and string helpers.
+ */
 #pragma once
 
 #include <stddef.h>
