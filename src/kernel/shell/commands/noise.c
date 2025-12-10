@@ -5,10 +5,11 @@
  */
 
 #include <lux/shell.h>
+#include <lux/time.h>
 #include <lux/tty.h>
 
 #define NOISE_FRAMES 300U
-#define NOISE_DELAY_ITER 200000U
+#define NOISE_FRAME_DELAY_MS 25U
 
 /**
  * Advance the internal pseudo-random generator and return the next value.
@@ -25,15 +26,11 @@ static uint32_t noise_rand(void) {
 }
 
 /**
- * Introduces a short busy-wait delay by looping NOISE_DELAY_ITER times.
- *
- * The loop executes a processor `pause` instruction each iteration to reduce
- * CPU pipeline/branch effects while waiting.
+ * Introduces a short cooperative delay between frames using the system
+ * sleep utility instead of a tight busy loop.
  */
 static void noise_delay(void) {
-    for(volatile uint32_t i = 0; i < NOISE_DELAY_ITER; ++i) {
-        __asm__ volatile("pause");
-    }
+    sleep_ms(NOISE_FRAME_DELAY_MS);
 }
 
 /**
