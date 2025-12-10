@@ -60,6 +60,13 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
 
+/**
+ * Enqueue a character into the pending input circular buffer.
+ *
+ * If the buffer is full, the oldest pending character is discarded to make room.
+ *
+ * @param c Character to append to the pending input buffer.
+ */
 static void pending_input_push(char c)
 {
     if (pending_input_count >= INPUT_BUFFER_SIZE) {
@@ -72,6 +79,12 @@ static void pending_input_push(char c)
     ++pending_input_count;
 }
 
+/**
+ * Remove and return the next pending input character from the circular pending_input buffer.
+ *
+ * @param out Pointer to a char where the popped character will be stored; must not be NULL.
+ * @returns `true` if a character was available and written to `out`, `false` if the buffer was empty or `out` is NULL.
+ */
 static bool pending_input_pop(char *out)
 {
     if (!pending_input_count || !out) {
@@ -84,8 +97,14 @@ static bool pending_input_pop(char *out)
     return true;
 }
 
-/* Poll PS/2 scancodes during long-running commands so Ctrl-C is observed.
- * Non-Ctrl-C symbols are queued for later consumption when the shell resumes. */
+/**
+ * Poll the keyboard for available scancodes and queue them for later processing.
+ *
+ * Reads all currently available characters from the keyboard and appends each
+ * character that is not the shell's Ctrl-C sentinel to the pending input queue.
+ * Ctrl-C scancodes are consumed here but not queued so the interrupt handler can
+ * process them separately.
+ */
 static void collect_background_input(void)
 {
     char symbol;
@@ -214,12 +233,9 @@ void shell_io_write_string(const struct shell_io *io, const char *str)
 }
 
 /**
- * Poll the keyboard for pending characters and record a Ctrl-C interrupt.
+ * Poll the keyboard for pending characters and report whether a Ctrl-C interrupt is pending.
  *
- * Performs deferred Ctrl-C reporting and returns the current interrupt state.
- *
- * When a Ctrl-C interrupt is pending and has not yet been presented to the
- * user, the function prints a "^C" marker and latches the announcement flag.
+ * If a Ctrl-C interrupt is pending and has not yet been announced, prints "^C\n" once and marks the interrupt as announced.
  *
  * @returns `true` if a Ctrl-C interrupt has been requested, `false` otherwise.
  */
@@ -293,8 +309,9 @@ static const char *history_get(size_t offset)
 }
 
 /**
- * Retrieve the next character for line editing, preferring buffered input gathered
- * while commands were running before falling back to a blocking keyboard read.
+ * Get the next input character, using previously buffered background input if available.
+ *
+ * @returns The next character from the pending input buffer if present, otherwise the next character read from the keyboard.
  */
 static char read_char_with_pending(void)
 {
@@ -317,6 +334,15 @@ static void shell_interrupt_reset_state(void)
     shell_interrupt_announced = false;
 }
 
+/**
+ * Handle interrupt signals and flag a pending Ctrl-C request.
+ *
+ * Sets the internal `shell_interrupt_requested` flag when `signal` is
+ * `INTERRUPT_SIGNAL_CTRL_C`, leaving other signals unmodified.
+ *
+ * @param signal Interrupt signal delivered to the handler.
+ * @param context Unused context pointer (ignored).
+ */
 static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
 {
     (void)context;
