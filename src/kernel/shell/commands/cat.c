@@ -3,11 +3,23 @@
 
 #define CAT_BUFFER_SIZE 512u
 
+/**
+ * Write the cat command usage string to the provided shell IO.
+ */
 static void cat_print_usage(const struct shell_io *io)
 {
     shell_io_write_string(io, "Usage: cat <path> [path...]\n");
 }
 
+/**
+ * Write a standardized cat error message to the given shell IO.
+ *
+ * Format: "cat: <path>: <reason>\n".
+ *
+ * @param io   Shell IO to write the message to.
+ * @param path Filesystem path associated with the error.
+ * @param reason Short description of the error reason.
+ */
 static void cat_print_error(const struct shell_io *io, const char *path, const char *reason)
 {
     shell_io_write_string(io, "cat: ");
@@ -17,6 +29,14 @@ static void cat_print_error(const struct shell_io *io, const char *path, const c
     shell_io_write_string(io, "\n");
 }
 
+/**
+ * Stream the contents of a regular file to the provided shell IO.
+ *
+ * @param path Filesystem path of the file to read.
+ * @param io   Shell IO to which file data and error messages are written.
+ * @returns `true` if the file was successfully streamed to `io`, `false` if the path was not found,
+ *          referred to a directory, or a read error occurred.
+ */
 static bool cat_stream_file(const char *path, const struct shell_io *io)
 {
     struct fs_stat stats;
@@ -55,6 +75,18 @@ static bool cat_stream_file(const char *path, const struct shell_io *io)
     return true;
 }
 
+/**
+ * Handle the `cat` shell command: print file contents or echo provided shell input.
+ *
+ * When one or more file paths are given, streams each file's contents to the provided shell I/O.
+ * If no path is provided and the shell I/O contains input data, writes that input back to the I/O.
+ * If no path is provided and there is no input, writes the command usage. If the filesystem is
+ * unavailable, writes a filesystem-unavailable error to the I/O.
+ *
+ * @param argc Number of arguments in `argv` (command name plus any paths).
+ * @param argv Argument vector where argv[1..argc-1] are file paths to display.
+ * @param io   Shell I/O to read input from and write output/errors to; may be NULL.
+ */
 static void cat_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc < 2) {

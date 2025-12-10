@@ -87,6 +87,16 @@ struct dir_emit_ctx {
     void *user_data;
 };
 
+/**
+ * Copy a filename into a fixed-size buffer with truncation and NUL termination.
+ *
+ * If `dst` is NULL the function does nothing. If `src` is NULL the destination
+ * is set to an empty string. Otherwise up to FS_NAME_MAX-1 bytes from `src`
+ * are copied into `dst` and a terminating NUL is written.
+ *
+ * @param dst Destination buffer (must be at least FS_NAME_MAX bytes long).
+ * @param src Source NUL-terminated string to copy, or NULL to write an empty name.
+ */
 static void luxfs_copy_name(char *dst, const char *src)
 {
     if (!dst) {
@@ -105,6 +115,16 @@ static void luxfs_copy_name(char *dst, const char *src)
     dst[len] = '\0';
 }
 
+/**
+ * Extract the basename component from a filesystem path into out_name.
+ *
+ * Copies the final path segment (the name after the last '/') into out_name,
+ * handling empty or root paths by producing "/". Trailing slashes are ignored.
+ * The result is truncated to FS_NAME_MAX - 1 bytes and always NUL-terminated.
+ *
+ * @param path Source path string; may be NULL or empty.
+ * @param out_name Destination buffer that receives the basename; if NULL no action is taken.
+ */
 static void luxfs_basename(const char *path, char *out_name)
 {
     if (!out_name) {
@@ -139,6 +159,19 @@ static void luxfs_basename(const char *path, char *out_name)
     out_name[len] = '\0';
 }
 
+/**
+ * Compare a directory record's name against a target and record a match.
+ *
+ * When the record name equals the target stored in the provided context, sets
+ * the context's `found` flag and, if `result` is non-NULL, writes the matched
+ * inode index to `*result`.
+ *
+ * @param record Directory record to compare.
+ * @param ctx_ptr Pointer to a `struct dir_find_ctx` containing `target`,
+ *                optional `result`, and `found` fields.
+ * @returns `false` to stop iteration when a match is found or the context is
+ *          invalid; `true` to continue iteration otherwise.
+ */
 static bool luxfs_dir_find_cb(const struct luxfs_dir_record *record, void *ctx_ptr)
 {
     struct dir_find_ctx *ctx = (struct dir_find_ctx *)ctx_ptr;
@@ -156,6 +189,16 @@ static bool luxfs_dir_find_cb(const struct luxfs_dir_record *record, void *ctx_p
     return true;
 }
 
+/**
+ * Emit a directory entry to the provided callback for a valid directory record.
+ *
+ * If `ctx_ptr` or its callback is NULL, or if the record's inode index is out of
+ * range or refers to a free inode, the function skips emitting and continues.
+ *
+ * @param record Pointer to the directory record to consider.
+ * @param ctx_ptr Pointer to a `struct dir_emit_ctx` containing the callback and user data.
+ * @returns `true` to indicate iteration should continue.
+ */
 static bool luxfs_dir_emit_cb(const struct luxfs_dir_record *record, void *ctx_ptr)
 {
     struct dir_emit_ctx *ctx = (struct dir_emit_ctx *)ctx_ptr;
@@ -180,16 +223,34 @@ static bool luxfs_dir_emit_cb(const struct luxfs_dir_record *record, void *ctx_p
     return true;
 }
 
+/**
+ * Selects the smaller of two 32-bit unsigned integers.
+ * @param a First value to compare.
+ * @param b Second value to compare.
+ * @returns The smaller of `a` and `b`.
+ */
 static inline uint32_t min_u32(uint32_t a, uint32_t b)
 {
     return (a < b) ? a : b;
 }
 
+/**
+ * Check whether a specific bit is set in a byte bitmap.
+ * @param bitmap Pointer to the bitmap bytes.
+ * @param index Zero-based bit index to test.
+ * @returns `true` if the bit at `index` is 1, `false` otherwise.
+ */
 static inline bool bitmap_test(const uint8_t *bitmap, uint32_t index)
 {
     return (bitmap[index / 8u] >> (index % 8u)) & 0x1u;
 }
 
+/**
+ * Set or clear a bit at a given bit index within a byte-array bitmap.
+ * @param bitmap Byte-array representing the bitmap where bit indices start at 0.
+ * @param index Bit index to modify (0 = first bit of bitmap[0]).
+ * @param value `true` to set the bit, `false` to clear the bit.
+ */
 static inline void bitmap_set(uint8_t *bitmap, uint32_t index, bool value)
 {
     uint32_t byte = index / 8u;
@@ -201,16 +262,35 @@ static inline void bitmap_set(uint8_t *bitmap, uint32_t index, bool value)
     }
 }
 
+/**
+ * Read a filesystem block from disk into a buffer.
+ * @param block Logical block index relative to the filesystem start.
+ * @param buffer Destination buffer; must be at least LUXFS_BLOCK_SIZE bytes.
+ * @returns `true` if the block was read successfully, `false` otherwise.
+ */
 static bool disk_read_block(uint32_t block, void *buffer)
 {
     return ata_pio_read(LUXFS_START_LBA + block, 1, buffer);
 }
 
+/**
+ * Write a filesystem block to the underlying ATA device at the specified block index.
+ *
+ * @param block Block index within the filesystem (0 = first filesystem block).
+ * @param buffer Pointer to a block-sized buffer containing the data to write.
+ * @returns `true` if the block was written successfully, `false` otherwise.
+ */
 static bool disk_write_block(uint32_t block, const void *buffer)
 {
     return ata_pio_write(LUXFS_START_LBA + block, 1, buffer);
 }
 
+/**
+ * Read a filesystem data block into the provided buffer.
+ * @param index Data block index within the filesystem data region (0 .. LUXFS_DATA_BLOCK_COUNT - 1).
+ * @param buffer Pointer to a buffer at least LUXFS_BLOCK_SIZE bytes in size that will receive the block data.
+ * @returns `true` if the block was successfully read from disk, `false` otherwise.
+ */
 static bool disk_read_data_block(uint32_t index, void *buffer)
 {
     if (index >= LUXFS_DATA_BLOCK_COUNT) {
@@ -219,6 +299,13 @@ static bool disk_read_data_block(uint32_t index, void *buffer)
     return ata_pio_read(LUXFS_START_LBA + LUXFS_DATA_BLOCK_START + index, 1, buffer);
 }
 
+/**
+ * Write a filesystem data block to disk.
+ *
+ * @param index Index of the data block within the filesystem data region.
+ * @param buffer Pointer to a block-sized buffer containing the data to write.
+ * @returns `true` if the block was written successfully, `false` otherwise.
+ */
 static bool disk_write_data_block(uint32_t index, const void *buffer)
 {
     if (index >= LUXFS_DATA_BLOCK_COUNT) {
@@ -227,6 +314,11 @@ static bool disk_write_data_block(uint32_t index, const void *buffer)
     return ata_pio_write(LUXFS_START_LBA + LUXFS_DATA_BLOCK_START + index, 1, buffer);
 }
 
+/**
+ * Persist the in-memory filesystem superblock to its on-disk location.
+ *
+ * @returns `true` if the superblock was written successfully, `false` otherwise.
+ */
 static bool luxfs_flush_superblock(void)
 {
     uint8_t buffer[ATA_SECTOR_SIZE];
@@ -235,6 +327,11 @@ static bool luxfs_flush_superblock(void)
     return disk_write_block(LUXFS_SUPER_BLOCK, buffer);
 }
 
+/**
+ * Writes the in-memory inode bitmap to the inode bitmap block on disk.
+ *
+ * @returns `true` if the inode bitmap was successfully written, `false` otherwise.
+ */
 static bool luxfs_flush_inode_bitmap(void)
 {
     uint8_t buffer[ATA_SECTOR_SIZE];
@@ -243,6 +340,11 @@ static bool luxfs_flush_inode_bitmap(void)
     return disk_write_block(LUXFS_INODE_BITMAP_BLOCK, buffer);
 }
 
+/**
+ * Write the in-memory block allocation bitmap to its on-disk bitmap block.
+ *
+ * @returns `true` if the bitmap was written to disk successfully, `false` otherwise.
+ */
 static bool luxfs_flush_block_bitmap(void)
 {
     uint8_t buffer[ATA_SECTOR_SIZE];
@@ -251,6 +353,15 @@ static bool luxfs_flush_block_bitmap(void)
     return disk_write_block(LUXFS_BLOCK_BITMAP_BLOCK, buffer);
 }
 
+/**
+ * Flushes the inode-table block identified by block_index to disk.
+ *
+ * Writes the in-memory inodes that belong to the specified inode-table block
+ * to the corresponding on-disk inode-table block.
+ *
+ * @param block_index Index of the inode-table block to flush (0..LUXFS_INODE_TABLE_BLOCKS-1).
+ * @returns `true` if the block was written successfully, `false` if block_index is out of range or the write failed.
+ */
 static bool luxfs_flush_inode_block(uint32_t block_index)
 {
     if (block_index >= LUXFS_INODE_TABLE_BLOCKS) {
@@ -266,6 +377,11 @@ static bool luxfs_flush_inode_block(uint32_t block_index)
     return disk_write_block(LUXFS_INODE_TABLE_START + block_index, buffer);
 }
 
+/**
+ * Flushes the disk block that contains the specified inode index from the in-memory inode table.
+ * @param inode_index Index of the inode whose containing inode-table block should be flushed.
+ * @returns `true` if the containing inode-table block was written successfully; `false` if `inode_index` is out of range or the write failed.
+ */
 static bool luxfs_flush_inode(uint32_t inode_index)
 {
     if (inode_index >= LUXFS_MAX_INODES) {
@@ -276,6 +392,14 @@ static bool luxfs_flush_inode(uint32_t inode_index)
     return luxfs_flush_inode_block(block_index);
 }
 
+/**
+ * Load filesystem metadata from disk into the in-memory filesystem state.
+ *
+ * Reads the on-disk superblock, inode bitmap, block bitmap, and inode table blocks
+ * and populates the global in-memory luxfs state (g_fs).
+ *
+ * @returns `true` if all metadata blocks were read and loaded successfully, `false` otherwise.
+ */
 static bool luxfs_load_metadata(void)
 {
     uint8_t buffer[ATA_SECTOR_SIZE];
@@ -307,6 +431,14 @@ static bool luxfs_load_metadata(void)
     return true;
 }
 
+/**
+ * Reset an inode to the free/empty state.
+ *
+ * Clears type to free, sets size and parent to zero, and marks all direct
+ * block pointers as invalid.
+ *
+ * @param inode Inode to clear; must be a valid pointer to a luxfs_inode.
+ */
 static void luxfs_inode_clear(struct luxfs_inode *inode)
 {
     inode->type = LUXFS_NODE_FREE;
@@ -317,6 +449,15 @@ static void luxfs_inode_clear(struct luxfs_inode *inode)
     }
 }
 
+/**
+ * Initialize and write a fresh LUXFS filesystem image to disk and set it as mounted.
+ *
+ * Formats in-memory filesystem structures (superblock, inode table, bitmaps, root inode),
+ * persists the superblock, inode bitmap, block bitmap and all inode table blocks to disk,
+ * and marks the filesystem as mounted on success.
+ *
+ * @returns `true` if formatting and all on-disk writes succeeded and the filesystem was marked mounted, `false` if any disk write or flush failed. 
+ */
 static bool luxfs_format(void)
 {
     memset(&g_fs, 0, sizeof(g_fs));
@@ -359,6 +500,13 @@ static bool luxfs_format(void)
     return true;
 }
 
+/**
+ * Validate the in-memory superblock against the filesystem's expected constants.
+ *
+ * @returns `true` if all critical superblock fields (magic, version, block size,
+ *          layout start/count fields and inode counts) match the expected
+ *          LUXFS constants, `false` otherwise.
+ */
 static bool luxfs_validate_superblock(void)
 {
     if (g_fs.super.magic != LUXFS_MAGIC) {
@@ -391,6 +539,14 @@ static bool luxfs_validate_superblock(void)
     return true;
 }
 
+/**
+ * Allocate a free inode, initialize it with the given type and parent, and persist inode metadata.
+ *
+ * @param type Inode type (one of LUXFS_NODE_FREE, LUXFS_NODE_DIR, LUXFS_NODE_FILE).
+ * @param parent Index of the parent inode to set on the allocated inode.
+ * @param out_index Pointer that receives the allocated inode index on success.
+ * @returns `true` if a free inode was found, initialized, and its metadata flushed to disk; `false` otherwise.
+ */
 static bool luxfs_alloc_inode(uint8_t type, uint32_t parent, uint32_t *out_index)
 {
     for (uint32_t i = 0; i < LUXFS_MAX_INODES; ++i) {
@@ -413,6 +569,14 @@ static bool luxfs_alloc_inode(uint8_t type, uint32_t parent, uint32_t *out_index
     return false;
 }
 
+/**
+ * Allocate the next free data block and persist the allocation in the block bitmap.
+ *
+ * Sets `*out_index` to the index of the allocated data block when successful and ensures the block bitmap is flushed to disk.
+ *
+ * @param out_index Pointer to receive the allocated data block index; unchanged on failure.
+ * @returns `true` if a free data block was found, marked allocated, and the bitmap flushed; `false` otherwise.
+ */
 static bool luxfs_alloc_block(uint32_t *out_index)
 {
     for (uint32_t i = 0; i < LUXFS_DATA_BLOCK_COUNT; ++i) {
@@ -428,6 +592,12 @@ static bool luxfs_alloc_block(uint32_t *out_index)
     return false;
 }
 
+/**
+ * Release a data block and persist the block allocation bitmap.
+ *
+ * @param index Index of the data block to free (0-based, must be less than LUXFS_DATA_BLOCK_COUNT).
+ * @returns `true` if the block was already free or was freed and the block bitmap was successfully written to disk; `false` if `index` is out of range or persistence of the bitmap failed.
+ */
 static bool luxfs_free_block(uint32_t index)
 {
     if (index >= LUXFS_DATA_BLOCK_COUNT) {
@@ -442,6 +612,16 @@ static bool luxfs_free_block(uint32_t index)
     return luxfs_flush_block_bitmap();
 }
 
+/**
+ * Release and clear all data blocks referenced by an inode and reset its size.
+ *
+ * Frees each allocated direct data block referenced by `inode`, sets each direct
+ * pointer to `LUXFS_INVALID_BLOCK`, and sets `inode->size` to 0.
+ *
+ * @param inode Inode whose data blocks should be released.
+ * @returns `true` if all allocated blocks were freed successfully, `false` if
+ * any block free operation failed or if `inode` is NULL.
+ */
 static bool luxfs_release_inode_blocks(struct luxfs_inode *inode)
 {
     if (!inode) {
@@ -461,6 +641,14 @@ static bool luxfs_release_inode_blocks(struct luxfs_inode *inode)
     return ok;
 }
 
+/**
+ * Mark an inode as free and persist the change to disk.
+ *
+ * Releases any data blocks held by the inode, resets the inode to the free state,
+ * clears its bit in the inode bitmap, and flushes the inode and inode bitmap to disk.
+ *
+ * @param index Index of the inode to free; ignored if out of valid range.
+ */
 static void luxfs_mark_inode_free(uint32_t index)
 {
     if (index >= LUXFS_MAX_INODES) {
@@ -475,6 +663,21 @@ static void luxfs_mark_inode_free(uint32_t index)
     luxfs_flush_inode_bitmap();
 }
 
+/**
+ * Iterate directory entries of a directory inode and invoke a callback for each entry.
+ *
+ * Iterates the serialized directory records stored in the directory inode's direct data blocks,
+ * invoking `callback` for each complete `luxfs_dir_record`. Iteration stops early if the
+ * callback returns `false`.
+ *
+ * @param dir_index Index of the directory inode to iterate.
+ * @param callback Function called for each directory record; receives a pointer to the record
+ *                 and the `ctx` pointer. If the callback returns `false`, iteration stops.
+ * @param ctx Opaque user-provided pointer forwarded to the callback.
+ * @returns `true` if iteration completed successfully or was stopped by the callback,
+ *          `false` on error (invalid inode, I/O failure, invalid block layout) or if the
+ *          final directory record is incomplete (partial trailing record).
+ */
 static bool luxfs_dir_iterate(uint32_t dir_index, bool (*callback)(const struct luxfs_dir_record *, void *), void *ctx)
 {
     if (dir_index >= LUXFS_MAX_INODES) {
@@ -541,6 +744,14 @@ static bool luxfs_dir_iterate(uint32_t dir_index, bool (*callback)(const struct 
     return record_progress == 0;
 }
 
+/**
+ * Search a directory for an entry by name and obtain its inode index.
+ *
+ * @param dir_index Index of the directory inode to search.
+ * @param name NUL-terminated name of the entry to find.
+ * @param inode_index Pointer to a uint32_t that will be set to the found inode index.
+ * @returns `true` if an entry with the given name was found and `*inode_index` was set, `false` otherwise.
+ */
 static bool luxfs_dir_find(uint32_t dir_index, const char *name, uint32_t *inode_index)
 {
     if (!name || !inode_index) {
@@ -560,6 +771,16 @@ static bool luxfs_dir_find(uint32_t dir_index, const char *name, uint32_t *inode
     return ctx.found;
 }
 
+/**
+ * Append a directory entry to the directory represented by the given inode.
+ *
+ * Appends `record` to the directory's data (growing the directory and persisting
+ * changes to disk), allocating data blocks and updating the inode as needed.
+ *
+ * @param dir_index Index of the directory inode to append into.
+ * @param record Pointer to the directory record to append; its contents are copied.
+ * @returns `true` if the record was appended and the inode flushed to disk, `false` on error.
+ */
 static bool luxfs_dir_append_record(uint32_t dir_index, const struct luxfs_dir_record *record)
 {
     if (dir_index >= LUXFS_MAX_INODES) {
@@ -619,6 +840,23 @@ static bool luxfs_dir_append_record(uint32_t dir_index, const struct luxfs_dir_r
     return luxfs_flush_inode(dir_index);
 }
 
+/**
+ * Split a filesystem path into its path components.
+ *
+ * Tokenizes `path` by '/' characters into `components`, omitting empty segments
+ * and single-dot ("." ) segments, and writes the number of resulting components
+ * to `*count`.
+ *
+ * @param path NUL-terminated path to tokenize.
+ * @param components Caller-provided array to receive components; each element
+ *        must be at least FS_NAME_MAX bytes. Only the first `*count` entries
+ *        are written.
+ * @param count Output pointer that receives the number of components written.
+ *        On failure the value pointed to is not modified.
+ * @returns `true` if tokenization succeeded, `false` on invalid input,
+ *          when the path exceeds LUXFS_MAX_PATH_DEPTH, or when a component
+ *          name would exceed FS_NAME_MAX - 1 characters.
+ */
 static bool luxfs_tokenize_path(const char *path, char components[][FS_NAME_MAX], size_t *count)
 {
     if (!path || !count) {
@@ -662,6 +900,16 @@ static bool luxfs_tokenize_path(const char *path, char components[][FS_NAME_MAX]
     return true;
 }
 
+/**
+ * Resolve a filesystem path to its corresponding inode index.
+ *
+ * Parses the path into components, traverses directories (handling the ".." parent
+ * component), and stores the final inode index in `inode_index` on success.
+ *
+ * @param path NUL-terminated filesystem path to resolve.
+ * @param inode_index Pointer to where the resolved inode index will be written.
+ * @returns `true` if the path was successfully resolved and `inode_index` set, `false` otherwise.
+ */
 static bool luxfs_resolve(const char *path, uint32_t *inode_index)
 {
     if (!inode_index) {
@@ -691,6 +939,18 @@ static bool luxfs_resolve(const char *path, uint32_t *inode_index)
     return true;
 }
 
+/**
+ * Resolve the parent directory inode for a filesystem path and extract the final path component (leaf).
+ *
+ * Tokenizes `path`, navigates components from the filesystem root while handling ".." to move to parent
+ * directories, and sets `parent_inode` to the inode index of the parent directory containing the leaf.
+ * The final path component is copied into `leaf` and NUL-terminated.
+ *
+ * @param path NUL-terminated filesystem path to resolve.
+ * @param parent_inode Pointer to receive the parent directory inode index; must be non-NULL.
+ * @param leaf Buffer to receive the final path component (basename); must be at least FS_NAME_MAX bytes.
+ * @returns `true` if the parent directory was successfully resolved and `leaf` was set, `false` otherwise.
+ */
 static bool luxfs_resolve_parent(const char *path, uint32_t *parent_inode, char *leaf)
 {
     if (!parent_inode || !leaf) {
@@ -731,6 +991,15 @@ static bool luxfs_resolve_parent(const char *path, uint32_t *parent_inode, char 
     return true;
 }
 
+/**
+ * Mounts and initializes the LUXFS filesystem and the underlying ATA PIO device.
+ *
+ * Attempts to ensure the ATA PIO subsystem is ready, load on-disk filesystem
+ * metadata, and recover by formatting the filesystem if metadata is missing or
+ * invalid. Safe to call repeatedly; returns success if the filesystem is already mounted.
+ *
+ * @returns `true` if the filesystem is mounted and ready, `false` otherwise.
+ */
 bool fs_mount(void)
 {
     if (g_fs.mounted) {
@@ -765,11 +1034,27 @@ bool fs_mount(void)
     return true;
 }
 
+/**
+ * Report whether the filesystem is currently mounted.
+ *
+ * @returns `true` if the filesystem is mounted, `false` otherwise.
+ */
 bool fs_ready(void)
 {
     return g_fs.mounted;
 }
 
+/**
+ * Ensure a regular file exists at the given filesystem path, creating it if necessary.
+ *
+ * Requires the filesystem to be mounted. If the path already exists and is a regular
+ * file the call succeeds; if it exists and is not a regular file the call fails.
+ * The function will not create intermediate directories and rejects invalid leaf
+ * names (empty, "." or "..").
+ *
+ * @param path Filesystem path for the file to ensure.
+ * @returns `true` if the file exists or was created successfully, `false` otherwise.
+ */
 bool fs_touch(const char *path)
 {
     if (!fs_ready() || !path) {
@@ -814,6 +1099,17 @@ bool fs_touch(const char *path)
     return true;
 }
 
+/**
+ * List the directory entries for a filesystem path or emit a single entry for a file.
+ *
+ * If `path` refers to a directory, invokes `cb` for each directory entry found.
+ * If `path` refers to a file, invokes `cb` once with that file's dirent.
+ *
+ * @param path Path to list; if NULL the root directory is used.
+ * @param cb Callback invoked for each emitted dirent; may be NULL to perform existence check only.
+ * @param user_data Opaque pointer forwarded to `cb`.
+ * @returns `true` if the path was successfully resolved and listing/emission completed, `false` on error (e.g., filesystem not mounted, path not found, or other failure).
+ */
 bool fs_list(const char *path, fs_dir_iter_cb cb, void *user_data)
 {
     if (!fs_ready()) {
@@ -852,6 +1148,18 @@ bool fs_list(const char *path, fs_dir_iter_cb cb, void *user_data)
     return luxfs_dir_iterate(inode_index, luxfs_dir_emit_cb, &ctx);
 }
 
+/**
+ * Retrieve filesystem metadata for a given path.
+ *
+ * Populates the provided fs_stat structure with the node type (directory flag)
+ * and size for the inode identified by the resolved path.
+ *
+ * @param path Path to the file or directory to stat.
+ * @param out_stats Pointer to an fs_stat structure to receive the results.
+ * @returns `true` if the path was resolved and out_stats was populated,
+ *          `false` if the filesystem is not mounted, arguments are invalid,
+ *          or the path does not exist.
+ */
 bool fs_stat_path(const char *path, struct fs_stat *out_stats)
 {
     if (!fs_ready() || !path || !out_stats) {
@@ -869,6 +1177,22 @@ bool fs_stat_path(const char *path, struct fs_stat *out_stats)
     return true;
 }
 
+/**
+ * Read data from a file at the given path into a caller buffer starting at a byte offset.
+ *
+ * Reads up to `length` bytes from the file denoted by `path`, beginning at `offset`, and copies
+ * the data into `buffer`. If `bytes_read` is non-NULL it will be set to the number of bytes
+ * actually copied. If `offset` is greater than or equal to the file size, no bytes are read and
+ * `*bytes_read` (if provided) is set to 0 while the call still succeeds. The call fails if the
+ * path does not resolve to a regular file, inputs are invalid, or underlying disk I/O fails.
+ *
+ * @param path Path to the target file.
+ * @param offset Byte offset within the file from which to start reading.
+ * @param buffer Destination buffer to receive the read data.
+ * @param length Maximum number of bytes to read into `buffer`.
+ * @param bytes_read Optional output that receives the number of bytes actually read.
+ * @returns `true` on success, `false` on failure.
+ */
 bool fs_read(const char *path, size_t offset, void *buffer, size_t length, size_t *bytes_read)
 {
     if (!fs_ready() || !path || !buffer) {
@@ -932,6 +1256,23 @@ bool fs_read(const char *path, size_t offset, void *buffer, size_t length, size_
     return true;
 }
 
+/**
+ * Write data to a file at the given path, optionally truncating the file before writing.
+ *
+ * If `truncate` is true the file's existing data blocks are released and size is reset to zero
+ * before writing. The write is limited to LUXFS_DIRECT_BLOCKS * ATA_SECTOR_SIZE bytes and will
+ * fail if `offset` or `length` would exceed that maximum. The function persists inode metadata
+ * on success.
+ *
+ * @param path Null-terminated path to the target file.
+ * @param offset Byte offset within the file at which to begin writing.
+ * @param buffer Pointer to the source data to write; may be NULL only when `length` is zero.
+ * @param length Number of bytes to write from `buffer`.
+ * @param truncate If true, discard the file's existing contents before writing.
+ * @returns `true` if the data and inode metadata were written and flushed successfully;
+ *          `false` on failure (not mounted, invalid arguments, path not found, target not a file,
+ *          offset/length exceed limits, allocation or I/O errors).
+ */
 bool fs_write(const char *path, size_t offset, const void *buffer, size_t length, bool truncate)
 {
     if (!fs_ready() || !path) {
