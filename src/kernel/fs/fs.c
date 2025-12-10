@@ -1047,10 +1047,9 @@ bool fs_ready(void)
 /**
  * Ensure a regular file exists at the given filesystem path, creating it if necessary.
  *
- * Requires the filesystem to be mounted. If the path already exists and is a regular
- * file the call succeeds; if it exists and is not a regular file the call fails.
- * The function will not create intermediate directories and rejects invalid leaf
- * names (empty, "." or "..").
+ * Does not create intermediate directories. Rejects empty leaf names and the special
+ * names "." and "..". Fails if an existing entry at the path is not a regular file
+ * or if the filesystem is not mounted.
  *
  * @param path Filesystem path for the file to ensure.
  * @returns `true` if the file exists or was created successfully, `false` otherwise.

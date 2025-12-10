@@ -2,7 +2,8 @@
 #include <lux/shell.h>
 
 /**
- * Print usage information for the mkdir command.
+ * Show the usage message for the mkdir command on the provided shell I/O.
+ * @param io I/O stream to which the usage string is written.
  */
 static void mkdir_usage(const struct shell_io *io)
 {
@@ -10,7 +11,10 @@ static void mkdir_usage(const struct shell_io *io)
 }
 
 /**
- * Emit a formatted mkdir error message.
+ * Print a formatted mkdir error for a specific path to the provided shell I/O.
+ *
+ * @param path Path that caused the error.
+ * @param reason Human-readable reason for the failure (for example, "already exists").
  */
 static void mkdir_print_error(const struct shell_io *io, const char *path, const char *reason)
 {
@@ -22,7 +26,17 @@ static void mkdir_print_error(const struct shell_io *io, const char *path, const
 }
 
 /**
- * Handle the mkdir command by creating each requested directory.
+ * Create directories for each path argument of the mkdir shell command.
+ *
+ * If invoked with fewer than one path argument it prints usage. If the
+ * filesystem is unavailable it reports that error. For each provided path,
+ * existing paths produce an "already exists" error and creation failures
+ * produce a "cannot create directory" error; successfully created directories
+ * produce no output.
+ *
+ * @param argc Number of arguments (including command name).
+ * @param argv Argument vector where argv[1..argc-1] are target paths.
+ * @param io Shell I/O used for usage and error messages.
  */
 static void mkdir_handler(int argc, char **argv, const struct shell_io *io)
 {
