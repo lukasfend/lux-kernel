@@ -26,8 +26,9 @@ static uint32_t noise_rand(void) {
 }
 
 /**
- * Introduces a short cooperative delay between frames using the system
- * sleep utility instead of a tight busy loop.
+ * Delay execution for the configured frame interval.
+ *
+ * Uses NOISE_FRAME_DELAY_MS to determine the delay duration in milliseconds.
  */
 static void noise_delay(void) {
     sleep_ms(NOISE_FRAME_DELAY_MS);

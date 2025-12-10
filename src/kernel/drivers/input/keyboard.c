@@ -141,6 +141,11 @@ static bool caps_lock_active;
 static bool extended_scancode_pending;
 static bool alt_gr_active;
 
+/**
+ * Determine whether a character is an ASCII letter or one of the supported German umlaut letters (ä, Ä, ö, Ö, ü, Ü).
+ * @param c Character to test.
+ * @returns `true` if `c` is in `a`–`z`, `A`–`Z`, or one of the specified umlaut characters; `false` otherwise.
+ */
 static bool is_letter_char(char c)
 {
     if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
@@ -160,6 +165,16 @@ static bool is_letter_char(char c)
     }
 }
 
+/**
+ * Translate a PS/2 scancode into the corresponding character for the active layout.
+ *
+ * Chooses the AltGr mapping when AltGr is active and an AltGr entry exists; otherwise
+ * applies Caps Lock and Shift semantics for letters and selects the shifted mapping
+ * if shift is effectively active and available, falling back to the normal mapping.
+ *
+ * @param scancode Scancode value (index into the current layout maps); values >= KEYBOARD_MAP_SIZE produce no mapping.
+ * @returns The mapped character for the scancode, or `0` if the scancode is out of range or unmapped.
+ */
 static char translate_scancode(uint8_t scancode)
 {
     if (scancode >= KEYBOARD_MAP_SIZE) {
@@ -189,6 +204,12 @@ static char translate_scancode(uint8_t scancode)
     return normal;
 }
 
+/**
+ * Translate an extended (0xE0-prefixed) PS/2 scancode to a special key value.
+ *
+ * @param scancode Scancode byte that follows the 0xE0 prefix.
+ * @returns `KEYBOARD_KEY_ARROW_UP` for 0x48, `KEYBOARD_KEY_ARROW_DOWN` for 0x50, `0` for unrecognized extended scancodes.
+ */
 static char translate_extended_scancode(uint8_t scancode)
 {
     switch (scancode) {
@@ -201,6 +222,15 @@ static char translate_extended_scancode(uint8_t scancode)
     }
 }
 
+/**
+ * Set the active keyboard layout used for scancode-to-character translation.
+ *
+ * Updates the driver's internal layout selection so subsequent key reads use the
+ * specified mapping. Unknown or unsupported `layout` values default to the
+ * US English layout.
+ *
+ * @param layout Enum value selecting the keyboard layout to activate.
+ */
 void keyboard_set_layout(enum keyboard_layout layout)
 {
     switch (layout) {
@@ -214,6 +244,15 @@ void keyboard_set_layout(enum keyboard_layout layout)
     }
 }
 
+/**
+ * Read the next translated character from the PS/2 keyboard.
+ *
+ * Polls the keyboard controller until a make code produces a mapped character,
+ * handling extended (0xE0) sequences and updating modifier state (left/right
+ * Shift, Caps Lock, AltGr) as scancodes are seen.
+ *
+ * @returns The next character translated according to the current keyboard
+ *          layout. */
 char keyboard_read_char(void)
 {
     for (;;) {

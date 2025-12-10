@@ -5,6 +5,17 @@
 #include <lux/shell.h>
 #include <lux/time.h> 
 
+/**
+ * Parse a NUL-terminated decimal string into a 32-bit unsigned integer.
+ *
+ * Attempts to convert `text` (ASCII digits only) into a uint32_t and store the
+ * result in `*value`. Fails if `text` is NULL or empty, contains any
+ * non-digit characters, or represents a value greater than 0xFFFFFFFF.
+ *
+ * @param text NUL-terminated ASCII string containing decimal digits to parse.
+ * @param value Output pointer that receives the parsed uint32_t on success.
+ * @returns `true` if parsing succeeded and `*value` was set, `false` otherwise.
+ */
 static bool parse_u32(const char *text, uint32_t *value)
 {
     if (!text || !*text || !value) {
@@ -30,6 +41,17 @@ static bool parse_u32(const char *text, uint32_t *value)
     return true;
 }
 
+/**
+ * Handle the "sleep" shell command to pause execution for a specified number of milliseconds.
+ *
+ * Validates that exactly one argument (milliseconds) is provided; writes a usage message to the shell I/O
+ * if the argument count is incorrect. Parses argv[1] as an unsigned 32-bit millisecond value; writes an
+ * error message to the shell I/O if parsing fails. On success, pauses execution for the parsed duration.
+ *
+ * @param argc Number of arguments in argv (including the command name).
+ * @param argv Argument vector where argv[0] is the command name and argv[1] is the milliseconds value.
+ * @param io   Shell I/O interface used to write usage or error messages.
+ */
 static void sleep_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc != 2) {

@@ -1,6 +1,12 @@
 #include <lux/memory.h>
 #include <lux/shell.h>
 
+/**
+ * Write a non-negative integer value to the shell IO as ASCII decimal digits.
+ *
+ * @param io Shell IO to receive the output characters.
+ * @param value Integer value to format and write in base 10.
+ */
 static void io_write_dec(const struct shell_io *io, size_t value)
 {
     char buffer[32];
@@ -21,6 +27,17 @@ static void io_write_dec(const struct shell_io *io, size_t value)
     }
 }
 
+/**
+ * Write a labeled numeric line to the shell IO.
+ *
+ * Writes the provided label, the decimal representation of value, an optional
+ * suffix if non-NULL, and a trailing newline to the given shell IO.
+ *
+ * @param io     Target shell IO to write to.
+ * @param label  String label printed before the numeric value.
+ * @param value  Numeric value printed in decimal.
+ * @param suffix Optional string printed after the numeric value; may be NULL.
+ */
 static void io_write_line(const struct shell_io *io, const char *label, size_t value, const char *suffix)
 {
     shell_io_write_string(io, label);
@@ -31,6 +48,15 @@ static void io_write_line(const struct shell_io *io, const char *label, size_t v
     shell_io_putc(io, '\n');
 }
 
+/**
+ * Handle the `meminfo` shell command by printing kernel heap statistics to the given shell I/O.
+ *
+ * Queries the kernel heap statistics and writes a human-readable summary (total, used, free,
+ * largest free block, allocation count, and free block count). If statistics cannot be retrieved,
+ * an error message is written instead.
+ *
+ * @param io Shell I/O to which the output is written.
+ */
 static void meminfo_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;

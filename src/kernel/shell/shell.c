@@ -15,6 +15,14 @@
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
 
+/**
+ * Compute the length of a C string up to a maximum limit.
+ *
+ * @param str Pointer to the NUL-terminated string to measure; may be NULL.
+ * @param max_len Maximum number of characters to examine.
+ * @return The number of bytes before the first NUL character, not exceeding `max_len`.
+ *         Returns 0 if `str` is NULL or the first character is NUL.
+ */
 static size_t shell_strnlen(const char *str, size_t max_len)
 {
     size_t len = 0;
@@ -39,6 +47,14 @@ static size_t history_head;
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
 
+/**
+ * Initialize a shell pipe buffer to an empty, non-overflowed state.
+ *
+ * Sets the buffer length to 0, clears the overflow flag, and writes an
+ * empty string terminator into the data array.
+ *
+ * @param buffer Pointer to the shell_pipe_buffer to initialize.
+ */
 static void pipe_buffer_init(struct shell_pipe_buffer *buffer)
 {
     buffer->length = 0;
@@ -46,6 +62,17 @@ static void pipe_buffer_init(struct shell_pipe_buffer *buffer)
     buffer->data[0] = '\0';
 }
 
+/**
+ * Append up to `len` bytes from `data` into a shell pipe buffer and null-terminate it.
+ *
+ * If the input would exceed the buffer's remaining capacity the write is truncated
+ * to fit and the buffer's `overflowed` flag is set. The function is a no-op when
+ * `context` or `data` is NULL or when `len` is zero.
+ *
+ * @param context Pointer to a `struct shell_pipe_buffer` to append into.
+ * @param data Pointer to the bytes to append.
+ * @param len Number of bytes to append; may be reduced to fit remaining capacity.
+ */
 static void pipe_buffer_writer(void *context, const char *data, size_t len)
 {
     struct shell_pipe_buffer *buffer = (struct shell_pipe_buffer *)context;
@@ -69,6 +96,15 @@ static void pipe_buffer_writer(void *context, const char *data, size_t len)
     buffer->data[buffer->length] = '\0';
 }
 
+/**
+ * Write a byte range to the system TTY.
+ *
+ * Writes up to `len` bytes from `data` to the TTY; if `data` is NULL or `len` is zero the call is ignored.
+ *
+ * @param context Unused writer context (may be NULL).
+ * @param data Pointer to bytes to write.
+ * @param len Number of bytes to write from `data`.
+ */
 static void tty_writer(void *context, const char *data, size_t len)
 {
     (void)context;
@@ -78,6 +114,16 @@ static void tty_writer(void *context, const char *data, size_t len)
     tty_write(data, len);
 }
 
+/**
+ * Write a buffer to the provided shell IO writer.
+ *
+ * Invokes the `io->write` callback with `io->context`, `data`, and `len`.
+ * No action is taken if `io` is NULL, `io->write` is NULL, `data` is NULL, or `len` is zero.
+ *
+ * @param io   Shell IO descriptor containing the write callback and context.
+ * @param data Pointer to the bytes to write.
+ * @param len  Number of bytes to write from `data`.
+ */
 void shell_io_write(const struct shell_io *io, const char *data, size_t len)
 {
     if (!io || !io->write || !data || !len) {
@@ -86,11 +132,25 @@ void shell_io_write(const struct shell_io *io, const char *data, size_t len)
     io->write(io->context, data, len);
 }
 
+/**
+ * Write a single character to the specified shell IO destination.
+ *
+ * @param io Destination IO context used to perform the write.
+ * @param c  Character to write.
+ */
 void shell_io_putc(const struct shell_io *io, char c)
 {
     shell_io_write(io, &c, 1u);
 }
 
+/**
+ * Write a null-terminated string to the given shell I/O writer.
+ *
+ * If `str` is NULL, the function performs no action.
+ *
+ * @param io I/O writer context used as the destination for the string.
+ * @param str Null-terminated string to write; may be NULL to indicate no output.
+ */
 void shell_io_write_string(const struct shell_io *io, const char *str)
 {
     if (!str) {
@@ -99,6 +159,15 @@ void shell_io_write_string(const struct shell_io *io, const char *str)
     shell_io_write(io, str, strlen(str));
 }
 
+/**
+ * Add a non-empty, non-blank line to the shell history ring buffer.
+ *
+ * If `line` is NULL, empty, or contains only spaces or tabs, it is ignored.
+ * At most INPUT_BUFFER_SIZE - 1 characters are stored; the stored entry is null-terminated.
+ * Advances the history head and increments the stored count up to HISTORY_SIZE.
+ *
+ * @param line Line to store in history.
+ */
 static void history_add(const char *line)
 {
     if (!line || !*line) {
@@ -132,6 +201,12 @@ static void history_add(const char *line)
     }
 }
 
+/**
+ * Retrieve a history entry by offset from the most recent record.
+ *
+ * @param offset Number of entries back from the newest (0 = most recent).
+ * @returns Pointer to the requested history string, or NULL if offset is out of range.
+ */
 static const char *history_get(size_t offset)
 {
     if (offset >= history_count) {
@@ -141,6 +216,20 @@ static const char *history_get(size_t offset)
     return history[index];
 }
 
+/**
+ * Replace the current edit buffer with new text and update the displayed prompt.
+ *
+ * Copies up to capacity-1 bytes from `text` into `buffer`, NUL-terminates it,
+ * updates `*len` to the resulting length, redraws the prompt and buffer content,
+ * and erases any leftover characters from the previous display if `previous_len`
+ * was longer than the new text.
+ *
+ * @param buffer Destination editing buffer to replace/display.
+ * @param capacity Total size of `buffer` in bytes.
+ * @param len Pointer to the current buffer length; updated to the new length.
+ * @param text New NUL-terminated text to place into `buffer` (may be NULL to clear).
+ * @param previous_len Length of the previously-displayed buffer used to erase leftover characters.
+ */
 static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, const char *text, size_t previous_len)
 {
     size_t copy_len = 0;
@@ -191,6 +280,12 @@ static void prompt(void)
     tty_write_string("lux> ");
 }
 
+/**
+ * Compute the length of the common prefix shared by two null-terminated strings.
+ * @param a First null-terminated string to compare.
+ * @param b Second null-terminated string to compare.
+ * @returns The number of initial characters that are identical in both strings.
+ */
 static size_t common_prefix_len(const char *a, const char *b)
 {
     size_t len = 0;
@@ -200,6 +295,14 @@ static size_t common_prefix_len(const char *a, const char *b)
     return len;
 }
 
+/**
+ * Checks whether `name` begins with the provided `prefix`.
+ *
+ * @param name Null-terminated string to test as the candidate name.
+ * @param prefix Prefix string to compare against `name`.
+ * @param prefix_len Number of characters from `prefix` to match; zero means match any `name`.
+ * @returns `true` if the first `prefix_len` characters of `name` are identical to `prefix`, `false` otherwise.
+ */
 static bool command_matches_prefix(const char *name, const char *prefix, size_t prefix_len)
 {
     if (!prefix_len) {
@@ -214,6 +317,13 @@ static bool command_matches_prefix(const char *name, const char *prefix, size_t 
     return true;
 }
 
+/**
+ * Check whether a buffer contains a space character within the first len bytes.
+ *
+ * @param buffer Buffer to examine.
+ * @param len Maximum number of bytes to inspect from the start of buffer.
+ * @returns `true` if a space character (' ') is found within the first `len` bytes of `buffer`, `false` otherwise.
+ */
 static bool buffer_has_space(const char *buffer, size_t len)
 {
     for (size_t i = 0; i < len; ++i) {
@@ -224,6 +334,12 @@ static bool buffer_has_space(const char *buffer, size_t len)
     return false;
 }
 
+/**
+ * Print the shell prompt and then echo exactly `len` characters from `buffer`.
+ *
+ * @param buffer Pointer to the character buffer to display; may not be null-terminated.
+ * @param len Number of characters from `buffer` to write after the prompt.
+ */
 static void redraw_prompt_with_buffer(const char *buffer, size_t len)
 {
     prompt();
@@ -232,6 +348,18 @@ static void redraw_prompt_with_buffer(const char *buffer, size_t len)
     }
 }
 
+/**
+ * Print all command names that match the given input prefix and restore the prompt.
+ *
+ * Writes a newline, then each command name whose first `len` characters equal `buffer`
+ * (an empty prefix matches all) on its own line, and finally redraws the prompt
+ * with `buffer` as the current input.
+ *
+ * @param buffer Pointer to the input buffer containing the prefix to match.
+ * @param len Number of bytes from `buffer` to use as the prefix.
+ * @param commands Array of command pointers to search.
+ * @param command_count Number of entries in `commands`.
+ */
 static void list_matches(const char *buffer, size_t len, const struct shell_command *const *commands, size_t command_count)
 {
     tty_putc('\n');
@@ -245,6 +373,26 @@ static void list_matches(const char *buffer, size_t len, const struct shell_comm
     redraw_prompt_with_buffer(buffer, len);
 }
 
+/**
+ * Perform tab completion for the current input buffer against available commands.
+ *
+ * Attempts to complete the word in buffer using the command names in commands.
+ * If the buffer is empty, prints a list of all commands. If the buffer contains
+ * whitespace, emits a bell and does nothing. If one or more commands match the
+ * current buffer prefix, appends any longer common prefix that fits into the
+ * buffer and echoes the characters to the TTY. If exactly one command matches
+ * fully, appends a trailing space (when space remains) and echoes it. If no
+ * matches are found, emits a bell. When multiple matches exist and no further
+ * characters can be added, lists the matching names.
+ *
+ * @param buffer Mutable NUL-terminated input buffer; will be modified when
+ *               characters are appended.
+ * @param len    Pointer to current length of the text in buffer; updated if
+ *               characters are appended.
+ * @param capacity Total capacity of buffer including space for the terminating NUL.
+ * @param commands Array of pointers to available shell_command structures.
+ * @param command_count Number of entries in commands.
+ */
 static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     if (!commands || !command_count) {
@@ -324,6 +472,18 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
     }
 }
 
+/**
+ * Read an interactive input line into a provided buffer with line-editing, history navigation, and tab completion.
+ *
+ * Reads characters from the keyboard, echoes edits to the terminal, supports backspace, up/down history recall,
+ * tab completion using the supplied command list, ignores carriage returns, and finishes when a newline is entered
+ * or the buffer capacity is reached.
+ *
+ * @param buffer Destination buffer where the entered line will be stored; the result is NUL-terminated.
+ * @param capacity Maximum size of `buffer` in bytes, including the terminating NUL.
+ * @param commands Array of pointers to available commands used for tab-completion (may be NULL if none).
+ * @param command_count Number of entries in `commands`.
+ * @returns The length of the entered line in bytes, not counting the terminating NUL. */
 static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
@@ -460,6 +620,19 @@ static int tokenize(char *line, char **argv, int max_args)
     return argc;
 }
 
+/**
+ * Parse an input line into trimmed pipeline segments separated by '|' and populate the segments array.
+ *
+ * The function modifies the input `line` in-place by replacing pipe characters and trailing segment
+ * whitespace with NUL terminators, sets `segments` to point at each segment's start, and sets
+ * `*segment_count` to the number of parsed segments.
+ *
+ * @param line Mutable NUL-terminated input string containing one or more commands possibly joined with '|'.
+ * @param segments Caller-provided array that will receive pointers to each segment within `line`.
+ * @param segment_count Pointer that will be set to the number of segments written into `segments`.
+ * @returns `true` if at least one non-empty segment was parsed and `segments`/`*segment_count` were populated;
+ *          `false` on parse error (empty input, empty segment, trailing pipe, or too many segments).
+ */
 static bool parse_pipeline(char *line, char **segments, size_t *segment_count)
 {
     size_t count = 0;
@@ -515,6 +688,18 @@ static bool parse_pipeline(char *line, char **segments, size_t *segment_count)
     return true;
 }
 
+/**
+ * Execute a sequence of pipeline segments by running each segment's command and forwarding intermediate output between stages.
+ *
+ * Each entry in `segments` is tokenized and looked up in `commands`; for intermediate stages output is captured and supplied
+ * as input to the next stage, and the final stage writes to the TTY. Errors and informational messages are written to the TTY.
+ *
+ * @param segments Array of null-terminated strings, one per pipeline segment (each segment is a full command line).
+ * @param segment_count Number of entries in `segments`.
+ * @param commands Array of available `shell_command` pointers used for command lookup.
+ * @param command_count Number of entries in `commands`.
+ * @returns `true` if all pipeline segments were executed successfully, `false` if execution failed (e.g., empty segment or unknown command).
+ */
 static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count)
 {
     char pipe_storage[PIPE_BUFFER_CAPACITY];
@@ -577,14 +762,13 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
 }
 
 /**
- * Run the interactive shell loop.
+ * Start and run the interactive shell until it exits.
  *
- * Initializes builtin commands and, if available, enters a read-evaluate loop that:
- * displays a prompt, reads a line from the keyboard, tokenizes it into arguments,
- * looks up a matching command by name, and invokes the command's handler.
- *
- * If no builtin commands are registered, writes an error message and returns without
- * entering the interactive loop. All user interaction is performed via the TTY.
+ * Initializes the registered builtin commands and, if none are available, writes
+ * an error to the TTY and returns. Otherwise prints a startup hint and enters a
+ * loop that prompts for user input, records non-empty lines in history,
+ * parses the line into pipeline segments, and executes the resulting commands
+ * until the shell is terminated.
  */
 void shell_run(void)
 {

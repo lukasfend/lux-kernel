@@ -150,6 +150,13 @@ void free(void *ptr)
     coalesce(block);
 }
 
+/**
+ * Allocate and zero-initialize an array of `count` elements each of `size` bytes.
+ *
+ * @param count Number of elements to allocate.
+ * @param size  Size in bytes of each element.
+ * @returns Pointer to the allocated, zeroed memory on success; `NULL` if `count` or `size` is zero, if `count * size` would overflow, or if allocation fails.
+ */
 void *calloc(size_t count, size_t size)
 {
     if (!count || !size) {
@@ -170,6 +177,23 @@ void *calloc(size_t count, size_t size)
     return ptr;
 }
 
+/**
+ * Populate heap usage statistics for the kernel heap.
+ *
+ * Fills the provided heap_stats structure with:
+ * - total_bytes: total payload bytes available in the heap
+ * - used_bytes: sum of payload bytes in allocated blocks
+ * - free_bytes: sum of payload bytes in free blocks
+ * - largest_free_block: size of the largest free payload block
+ * - allocation_count: number of allocated blocks
+ * - free_block_count: number of free blocks
+ *
+ * If the heap is not initialized, the function returns baseline values that represent
+ * a single free block spanning the entire heap payload.
+ *
+ * @param stats Pointer to a heap_stats structure to populate; must not be NULL.
+ * @returns true on success, false if `stats` is NULL.
+ */
 bool heap_get_stats(struct heap_stats *stats)
 {
     if (!stats) {
