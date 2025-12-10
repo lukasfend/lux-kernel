@@ -1,5 +1,4 @@
 #include <lux/shell.h>
-#include <lux/tty.h>
 
 /**
  * Print a formatted list of built-in shell commands to the TTY.
@@ -11,7 +10,7 @@
  * @param argc Unused command argument count.
  * @param argv Unused command argument vector.
  */
-static void help_handler(int argc, char **argv)
+static void help_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
     (void)argv;
@@ -19,13 +18,13 @@ static void help_handler(int argc, char **argv)
     size_t count = 0;
     const struct shell_command *const *commands = shell_builtin_commands(&count);
 
-    tty_write_string("Available commands:\n");
+    shell_io_write_string(io, "Available commands:\n");
     for (size_t i = 0; i < count; ++i) {
-        tty_write_string("  ");
-        tty_write_string(commands[i]->name);
-        tty_write_string(" - ");
-        tty_write_string(commands[i]->help);
-        tty_putc('\n');
+        shell_io_write_string(io, "  ");
+        shell_io_write_string(io, commands[i]->name);
+        shell_io_write_string(io, " - ");
+        shell_io_write_string(io, commands[i]->help);
+        shell_io_putc(io, '\n');
     }
 }
 

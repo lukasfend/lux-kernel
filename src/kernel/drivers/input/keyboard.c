@@ -189,6 +189,18 @@ static char translate_scancode(uint8_t scancode)
     return normal;
 }
 
+static char translate_extended_scancode(uint8_t scancode)
+{
+    switch (scancode) {
+    case 0x48:
+        return KEYBOARD_KEY_ARROW_UP;
+    case 0x50:
+        return KEYBOARD_KEY_ARROW_DOWN;
+    default:
+        return 0;
+    }
+}
+
 void keyboard_set_layout(enum keyboard_layout layout)
 {
     switch (layout) {
@@ -237,6 +249,12 @@ char keyboard_read_char(void)
         if (is_extended) {
             if (scancode == 0x38) {
                 alt_gr_active = true;
+                continue;
+            }
+
+            char extended = translate_extended_scancode(scancode);
+            if (extended) {
+                return extended;
             }
             continue;
         }

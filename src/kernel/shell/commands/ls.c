@@ -1,13 +1,12 @@
 #include <lux/shell.h>
-#include <lux/tty.h>
 
-static void ls_handler(int argc, char **argv)
+static void ls_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
     (void)argv;
 
-    tty_write_string("Filesystem support is not available yet.\n");
-    tty_write_string("Stub 'ls' command: implement storage drivers to list directories.\n");
+    shell_io_write_string(io, "Filesystem support is not available yet.\n");
+    shell_io_write_string(io, "Stub 'ls' command: implement storage drivers to list directories.\n");
 }
 
 const struct shell_command shell_command_ls = {

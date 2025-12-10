@@ -71,7 +71,7 @@ static void draw_noise_frame(void)
  * Clears the terminal, repeatedly draws a sequence of noise frames with
  * inter-frame delays, then clears the terminal and writes "Noise done.".
  */
-static void noise_handler(int argc, char **argv) {
+static void noise_handler(int argc, char **argv, const struct shell_io *io) {
     (void)argc;
     (void)argv;
     tty_clear();
@@ -81,7 +81,7 @@ static void noise_handler(int argc, char **argv) {
         noise_delay(); 
     }
     tty_clear();
-    tty_write_string("Noise done.\n");
+    shell_io_write_string(io, "Noise done.\n");
 }
 
 const struct shell_command shell_command_noise = {

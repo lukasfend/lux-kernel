@@ -15,9 +15,10 @@
  * @param argc Number of arguments (ignored).
  * @param argv Argument array (ignored).
  */
-static void clear_handler(int argc, char **argv) {
+static void clear_handler(int argc, char **argv, const struct shell_io *io) {
     (void)argc;
     (void)argv;
+    (void)io;
     tty_clear();
 }
 

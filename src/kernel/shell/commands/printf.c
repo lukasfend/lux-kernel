@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include <lux/shell.h>
-#include <lux/tty.h>
 
 static const char *usage_message = "Usage: printf <format> [args...]\n";
 
@@ -95,7 +94,7 @@ static bool parse_signed(const char *str, long long *out)
     return true;
 }
 
-static void write_unsigned(unsigned long long value, unsigned base, bool uppercase)
+static void write_unsigned(const struct shell_io *io, unsigned long long value, unsigned base, bool uppercase)
 {
     static const char *digits_lower = "0123456789abcdef";
     static const char *digits_upper = "0123456789ABCDEF";
@@ -118,39 +117,39 @@ static void write_unsigned(unsigned long long value, unsigned base, bool upperca
     }
 
     while (len--) {
-        tty_putc(buffer[len]);
+        shell_io_putc(io, buffer[len]);
     }
 }
 
-static void write_signed(long long value)
+static void write_signed(const struct shell_io *io, long long value)
 {
     if (value < 0) {
-        tty_putc('-');
+        shell_io_putc(io, '-');
         unsigned long long magnitude = (unsigned long long)(-(value + 1)) + 1ULL;
-        write_unsigned(magnitude, 10, false);
+        write_unsigned(io, magnitude, 10, false);
     } else {
-        write_unsigned((unsigned long long)value, 10, false);
+        write_unsigned(io, (unsigned long long)value, 10, false);
     }
 }
 
-static void write_pointer(uintptr_t value)
+static void write_pointer(const struct shell_io *io, uintptr_t value)
 {
-    tty_write_string("0x");
-    write_unsigned((unsigned long long)value, 16, false);
+    shell_io_write_string(io, "0x");
+    write_unsigned(io, (unsigned long long)value, 16, false);
 }
 
-static void report_missing_argument(char spec)
+static void report_missing_argument(const struct shell_io *io, char spec)
 {
-    tty_write_string("printf: missing argument for %");
-    tty_putc(spec);
-    tty_putc('\n');
+    shell_io_write_string(io, "printf: missing argument for %");
+    shell_io_putc(io, spec);
+    shell_io_putc(io, '\n');
 }
 
-static void report_invalid_argument(const char *arg)
+static void report_invalid_argument(const struct shell_io *io, const char *arg)
 {
-    tty_write_string("printf: invalid numeric argument '");
-    tty_write_string(arg);
-    tty_write_string("'\n");
+    shell_io_write_string(io, "printf: invalid numeric argument '");
+    shell_io_write_string(io, arg);
+    shell_io_write_string(io, "'\n");
 }
 
 static char decode_escape(char c)
@@ -173,10 +172,10 @@ static char decode_escape(char c)
     }
 }
 
-static void printf_handler(int argc, char **argv)
+static void printf_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc < 2) {
-        tty_write_string(usage_message);
+        shell_io_write_string(io, usage_message);
         return;
     }
 
@@ -190,81 +189,81 @@ static void printf_handler(int argc, char **argv)
             char next = fmt[i + 1];
             if (next != '\0') {
                 ++i;
-                tty_putc(decode_escape(next));
+                shell_io_putc(io, decode_escape(next));
                 continue;
             }
         }
 
         if (c != '%') {
-            tty_putc(c);
+            shell_io_putc(io, c);
             continue;
         }
 
         char spec = fmt[++i];
         if (spec == '\0') {
-            tty_putc('%');
+            shell_io_putc(io, '%');
             break;
         }
 
         if (spec == '%') {
-            tty_putc('%');
+            shell_io_putc(io, '%');
             continue;
         }
 
         if (next_arg >= argc) {
-            report_missing_argument(spec);
+            report_missing_argument(io, spec);
             return;
         }
 
         const char *arg = argv[next_arg++];
         switch (spec) {
         case 's':
-            tty_write_string(arg);
+            shell_io_write_string(io, arg);
             break;
         case 'c':
-            tty_putc(arg[0]);
+            shell_io_putc(io, arg[0]);
             break;
         case 'd':
         case 'i': {
             long long value;
             if (!parse_signed(arg, &value)) {
-                report_invalid_argument(arg);
+                report_invalid_argument(io, arg);
                 return;
             }
-            write_signed(value);
+            write_signed(io, value);
             break;
         }
         case 'u': {
             unsigned long long value;
             if (!parse_unsigned_auto(arg, &value)) {
-                report_invalid_argument(arg);
+                report_invalid_argument(io, arg);
                 return;
             }
-            write_unsigned(value, 10, false);
+            write_unsigned(io, value, 10, false);
             break;
         }
         case 'x':
         case 'X': {
             unsigned long long value;
             if (!parse_unsigned_hex(arg, &value)) {
-                report_invalid_argument(arg);
+                report_invalid_argument(io, arg);
                 return;
             }
-            write_unsigned(value, 16, spec == 'X');
+            write_unsigned(io, value, 16, spec == 'X');
             break;
         }
         case 'p': {
             unsigned long long value;
             if (!parse_unsigned_hex(arg, &value)) {
-                report_invalid_argument(arg);
+                report_invalid_argument(io, arg);
                 return;
             }
-            write_pointer((uintptr_t)value);
+            write_pointer(io, (uintptr_t)value);
             break;
         }
         default:
-            tty_putc('%');
-            tty_putc(spec);
+            shell_io_putc(io, '%');
+            shell_io_putc(io, spec);
             break;
         }
     }

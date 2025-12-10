@@ -1,14 +1,13 @@
 #include <lux/memory.h>
 #include <lux/shell.h>
-#include <lux/tty.h>
 
-static void tty_write_dec(size_t value)
+static void io_write_dec(const struct shell_io *io, size_t value)
 {
     char buffer[32];
     size_t index = 0;
 
     if (value == 0) {
-        tty_putc('0');
+        shell_io_putc(io, '0');
         return;
     }
 
@@ -18,38 +17,38 @@ static void tty_write_dec(size_t value)
     }
 
     while (index) {
-        tty_putc(buffer[--index]);
+        shell_io_putc(io, buffer[--index]);
     }
 }
 
-static void tty_write_line(const char *label, size_t value, const char *suffix)
+static void io_write_line(const struct shell_io *io, const char *label, size_t value, const char *suffix)
 {
-    tty_write_string(label);
-    tty_write_dec(value);
+    shell_io_write_string(io, label);
+    io_write_dec(io, value);
     if (suffix) {
-        tty_write_string(suffix);
+        shell_io_write_string(io, suffix);
     }
-    tty_putc('\n');
+    shell_io_putc(io, '\n');
 }
 
-static void meminfo_handler(int argc, char **argv)
+static void meminfo_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
     (void)argv;
 
     struct heap_stats stats;
     if (!heap_get_stats(&stats)) {
-        tty_write_string("Unable to query heap statistics.\n");
+        shell_io_write_string(io, "Unable to query heap statistics.\n");
         return;
     }
 
-    tty_write_string("Kernel heap usage:\n");
-    tty_write_line("  Total: ", stats.total_bytes, " bytes");
-    tty_write_line("  Used : ", stats.used_bytes, " bytes");
-    tty_write_line("  Free : ", stats.free_bytes, " bytes");
-    tty_write_line("  Largest free block: ", stats.largest_free_block, " bytes");
-    tty_write_line("  Allocations: ", stats.allocation_count, 0);
-    tty_write_line("  Free blocks: ", stats.free_block_count, 0);
+    shell_io_write_string(io, "Kernel heap usage:\n");
+    io_write_line(io, "  Total: ", stats.total_bytes, " bytes");
+    io_write_line(io, "  Used : ", stats.used_bytes, " bytes");
+    io_write_line(io, "  Free : ", stats.free_bytes, " bytes");
+    io_write_line(io, "  Largest free block: ", stats.largest_free_block, " bytes");
+    io_write_line(io, "  Allocations: ", stats.allocation_count, 0);
+    io_write_line(io, "  Free blocks: ", stats.free_block_count, 0);
 }
 
 const struct shell_command shell_command_meminfo = {

@@ -11,6 +11,159 @@
 
 #define INPUT_BUFFER_SIZE 128
 #define MAX_ARGS 8
+#define HISTORY_SIZE 16
+#define MAX_PIPE_SEGMENTS 4
+#define PIPE_BUFFER_CAPACITY 1024
+
+static size_t shell_strnlen(const char *str, size_t max_len)
+{
+    size_t len = 0;
+    if (!str) {
+        return 0;
+    }
+    while (len < max_len && str[len]) {
+        ++len;
+    }
+    return len;
+}
+
+struct shell_pipe_buffer {
+    char data[PIPE_BUFFER_CAPACITY];
+    size_t length;
+    bool overflowed;
+};
+
+static char history[HISTORY_SIZE][INPUT_BUFFER_SIZE];
+static size_t history_count;
+static size_t history_head;
+
+static void redraw_prompt_with_buffer(const char *buffer, size_t len);
+
+static void pipe_buffer_init(struct shell_pipe_buffer *buffer)
+{
+    buffer->length = 0;
+    buffer->overflowed = false;
+    buffer->data[0] = '\0';
+}
+
+static void pipe_buffer_writer(void *context, const char *data, size_t len)
+{
+    struct shell_pipe_buffer *buffer = (struct shell_pipe_buffer *)context;
+    if (!buffer || !data || !len) {
+        return;
+    }
+
+    size_t remaining = (PIPE_BUFFER_CAPACITY - 1u) - buffer->length;
+    if (!remaining) {
+        buffer->overflowed = true;
+        return;
+    }
+
+    if (len > remaining) {
+        len = remaining;
+        buffer->overflowed = true;
+    }
+
+    memcpy(buffer->data + buffer->length, data, len);
+    buffer->length += len;
+    buffer->data[buffer->length] = '\0';
+}
+
+static void tty_writer(void *context, const char *data, size_t len)
+{
+    (void)context;
+    if (!data || !len) {
+        return;
+    }
+    tty_write(data, len);
+}
+
+void shell_io_write(const struct shell_io *io, const char *data, size_t len)
+{
+    if (!io || !io->write || !data || !len) {
+        return;
+    }
+    io->write(io->context, data, len);
+}
+
+void shell_io_putc(const struct shell_io *io, char c)
+{
+    shell_io_write(io, &c, 1u);
+}
+
+void shell_io_write_string(const struct shell_io *io, const char *str)
+{
+    if (!str) {
+        return;
+    }
+    shell_io_write(io, str, strlen(str));
+}
+
+static void history_add(const char *line)
+{
+    if (!line || !*line) {
+        return;
+    }
+
+    size_t len = shell_strnlen(line, INPUT_BUFFER_SIZE - 1u);
+    if (!len) {
+        return;
+    }
+
+    bool has_content = false;
+    for (size_t i = 0; i < len; ++i) {
+        if (line[i] != ' ' && line[i] != '\t') {
+            has_content = true;
+            break;
+        }
+    }
+
+    if (!has_content) {
+        return;
+    }
+
+    size_t slot = history_head;
+    memcpy(history[slot], line, len);
+    history[slot][len] = '\0';
+
+    history_head = (history_head + 1u) % HISTORY_SIZE;
+    if (history_count < HISTORY_SIZE) {
+        ++history_count;
+    }
+}
+
+static const char *history_get(size_t offset)
+{
+    if (offset >= history_count) {
+        return 0;
+    }
+    size_t index = (history_head + HISTORY_SIZE - 1u - offset) % HISTORY_SIZE;
+    return history[index];
+}
+
+static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, const char *text, size_t previous_len)
+{
+    size_t copy_len = 0;
+    if (text) {
+        copy_len = shell_strnlen(text, capacity - 1u);
+        memcpy(buffer, text, copy_len);
+    }
+    buffer[copy_len] = '\0';
+    *len = copy_len;
+
+    tty_putc('\r');
+    redraw_prompt_with_buffer(buffer, *len);
+
+    if (previous_len > *len) {
+        size_t diff = previous_len - *len;
+        for (size_t i = 0; i < diff; ++i) {
+            tty_putc(' ');
+        }
+        for (size_t i = 0; i < diff; ++i) {
+            tty_putc('\b');
+        }
+    }
+}
 
 /**
  * Locate a shell command by name in a supplied array of command pointers.
@@ -174,10 +327,68 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
+    int history_offset = -1;
+    bool saved_current_valid = false;
+    char saved_current[INPUT_BUFFER_SIZE];
 
     while (len + 1 < capacity) {
         char c = keyboard_read_char();
         if (!c) {
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_UP) {
+            if ((size_t)(history_offset + 1) >= history_count) {
+                tty_putc('\a');
+                continue;
+            }
+
+            if (history_offset == -1 && !saved_current_valid) {
+                size_t copy_len = len;
+                size_t limit = capacity - 1u;
+                if (copy_len > limit) {
+                    copy_len = limit;
+                }
+                memcpy(saved_current, buffer, copy_len);
+                saved_current[copy_len] = '\0';
+                saved_current_valid = true;
+            }
+
+            ++history_offset;
+            const char *entry = history_get((size_t)history_offset);
+            if (!entry) {
+                tty_putc('\a');
+                --history_offset;
+                continue;
+            }
+
+            size_t previous_len = len;
+            replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_DOWN) {
+            if (history_offset < 0) {
+                tty_putc('\a');
+                continue;
+            }
+
+            --history_offset;
+            size_t previous_len = len;
+
+            if (history_offset >= 0) {
+                const char *entry = history_get((size_t)history_offset);
+                if (!entry) {
+                    history_offset = -1;
+                } else {
+                    replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+                    continue;
+                }
+            }
+
+            const char *fallback = saved_current_valid ? saved_current : 0;
+            replace_buffer_with_text(buffer, capacity, &len, fallback, previous_len);
+            saved_current_valid = false;
             continue;
         }
 
@@ -195,16 +406,22 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
                 --len;
                 tty_putc('\b');
             }
+            history_offset = -1;
+            saved_current_valid = false;
             continue;
         }
 
         if (c == '\t') {
+            history_offset = -1;
+            saved_current_valid = false;
             handle_tab_completion(buffer, &len, capacity, commands, command_count);
             continue;
         }
 
         buffer[len++] = c;
         tty_putc(c);
+        history_offset = -1;
+        saved_current_valid = false;
     }
 
     buffer[len] = '\0';
@@ -243,6 +460,122 @@ static int tokenize(char *line, char **argv, int max_args)
     return argc;
 }
 
+static bool parse_pipeline(char *line, char **segments, size_t *segment_count)
+{
+    size_t count = 0;
+    char *cursor = line;
+
+    while (*cursor) {
+        while (*cursor == ' ') {
+            ++cursor;
+        }
+
+        if (!*cursor) {
+            break;
+        }
+
+        if (count >= MAX_PIPE_SEGMENTS) {
+            tty_write_string("Too many piped commands (max 4).\n");
+            return false;
+        }
+
+        char *start = cursor;
+        while (*cursor && *cursor != '|') {
+            ++cursor;
+        }
+
+        char *end = cursor;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+            --end;
+        }
+
+        if (end == start) {
+            tty_write_string("Empty command in pipeline.\n");
+            return false;
+        }
+
+        *end = '\0';
+        segments[count++] = start;
+
+        if (*cursor == '|') {
+            *cursor = '\0';
+            ++cursor;
+            if (!*cursor) {
+                tty_write_string("Trailing pipe requires another command.\n");
+                return false;
+            }
+        }
+    }
+
+    if (!count) {
+        return false;
+    }
+
+    *segment_count = count;
+    return true;
+}
+
+static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count)
+{
+    char pipe_storage[PIPE_BUFFER_CAPACITY];
+    size_t pipe_storage_len = 0;
+    bool pipe_storage_valid = false;
+
+    for (size_t i = 0; i < segment_count; ++i) {
+        char *argv_local[MAX_ARGS];
+        int argc = tokenize(segments[i], argv_local, MAX_ARGS);
+        if (!argc) {
+            tty_write_string("Empty command in pipeline.\n");
+            return false;
+        }
+
+        const struct shell_command *cmd = find_command(argv_local[0], commands, command_count);
+        if (!cmd) {
+            tty_write_string("Unknown command: ");
+            tty_write_string(argv_local[0]);
+            tty_putc('\n');
+            return false;
+        }
+
+        bool has_next = (i + 1u) < segment_count;
+        struct shell_pipe_buffer pipe_buffer;
+        struct shell_io io;
+
+        if (pipe_storage_valid) {
+            io.input = pipe_storage;
+            io.input_len = pipe_storage_len;
+        } else {
+            io.input = 0;
+            io.input_len = 0;
+        }
+
+        if (has_next) {
+            pipe_buffer_init(&pipe_buffer);
+            io.write = pipe_buffer_writer;
+            io.context = &pipe_buffer;
+        } else {
+            io.write = tty_writer;
+            io.context = 0;
+        }
+
+        cmd->handler(argc, argv_local, &io);
+
+        if (has_next) {
+            pipe_storage_len = pipe_buffer.length;
+            memcpy(pipe_storage, pipe_buffer.data, pipe_storage_len + 1u);
+            pipe_storage_valid = true;
+            if (pipe_buffer.overflowed) {
+                tty_write_string("\n[pipe] output truncated (buffer full)\n");
+            }
+        } else {
+            pipe_storage_valid = false;
+            pipe_storage_len = 0;
+        }
+    }
+
+    return true;
+}
+
 /**
  * Run the interactive shell loop.
  *
@@ -256,7 +589,6 @@ static int tokenize(char *line, char **argv, int max_args)
 void shell_run(void)
 {
     char buffer[INPUT_BUFFER_SIZE];
-    char *argv[MAX_ARGS];
     size_t command_count = 0;
     const struct shell_command *const *commands = shell_builtin_commands(&command_count);
 
@@ -274,19 +606,14 @@ void shell_run(void)
             continue;
         }
 
-        int argc = tokenize(buffer, argv, MAX_ARGS);
-        if (!argc) {
+        history_add(buffer);
+
+        char *segments[MAX_PIPE_SEGMENTS];
+        size_t segment_count = 0;
+        if (!parse_pipeline(buffer, segments, &segment_count)) {
             continue;
         }
 
-        const struct shell_command *cmd = find_command(argv[0], commands, command_count);
-        if (!cmd) {
-            tty_write_string("Unknown command: ");
-            tty_write_string(argv[0]);
-            tty_putc('\n');
-            continue;
-        }
-
-        cmd->handler(argc, argv);
+        execute_pipeline(segments, segment_count, commands, command_count);
     }
 }

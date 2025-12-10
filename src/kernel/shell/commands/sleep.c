@@ -3,8 +3,7 @@
 #include <stdint.h>
 
 #include <lux/shell.h>
-#include <lux/time.h>
-#include <lux/tty.h>
+#include <lux/time.h> 
 
 static bool parse_u32(const char *text, uint32_t *value)
 {
@@ -31,16 +30,16 @@ static bool parse_u32(const char *text, uint32_t *value)
     return true;
 }
 
-static void sleep_handler(int argc, char **argv)
+static void sleep_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc != 2) {
-        tty_write_string("Usage: sleep <milliseconds>\n");
+        shell_io_write_string(io, "Usage: sleep <milliseconds>\n");
         return;
     }
 
     uint32_t duration = 0;
     if (!parse_u32(argv[1], &duration)) {
-        tty_write_string("sleep: invalid millisecond value\n");
+        shell_io_write_string(io, "sleep: invalid millisecond value\n");
         return;
     }
 

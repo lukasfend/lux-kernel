@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include <lux/shell.h>
-#include <lux/tty.h>
 
 #define HEXDUMP_BYTES_PER_LINE 16u
 #define HEXDUMP_MAX_BYTES 512u
@@ -16,18 +15,18 @@ static char hex_digit(uint8_t value)
     return (char)('A' + (value - 10u));
 }
 
-static void tty_write_hex32(uint32_t value)
+static void io_write_hex32(const struct shell_io *io, uint32_t value)
 {
     for (int shift = 28; shift >= 0; shift -= 4) {
         uint8_t nibble = (uint8_t)((value >> shift) & 0xFu);
-        tty_putc(hex_digit(nibble));
+        shell_io_putc(io, hex_digit(nibble));
     }
 }
 
-static void tty_write_hex8(uint8_t value)
+static void io_write_hex8(const struct shell_io *io, uint8_t value)
 {
-    tty_putc(hex_digit((uint8_t)(value >> 4))); 
-    tty_putc(hex_digit((uint8_t)(value & 0xFu)));
+    shell_io_putc(io, hex_digit((uint8_t)(value >> 4)));
+    shell_io_putc(io, hex_digit((uint8_t)(value & 0xFu)));
 }
 
 static bool parse_unsigned(const char *text, size_t *out)
@@ -63,19 +62,19 @@ static bool parse_unsigned(const char *text, size_t *out)
     return true;
 }
 
-static void write_ascii(const uint8_t *data, size_t count)
+static void write_ascii(const struct shell_io *io, const uint8_t *data, size_t count)
 {
     for (size_t i = 0; i < count; ++i) {
         char c = (char)data[i];
         if (c < 32 || c > 126) {
-            tty_putc('.');
+            shell_io_putc(io, '.');
         } else {
-            tty_putc(c);
+            shell_io_putc(io, c);
         }
     }
 }
 
-static void hexdump_region(const uint8_t *base, size_t length)
+static void hexdump_region(const struct shell_io *io, const uint8_t *base, size_t length)
 {
     size_t offset = 0;
     while (offset < length) {
@@ -84,30 +83,30 @@ static void hexdump_region(const uint8_t *base, size_t length)
             line_count = HEXDUMP_BYTES_PER_LINE;
         }
 
-        tty_write_hex32((uint32_t)((uintptr_t)base + offset));
-        tty_write_string(": ");
+        io_write_hex32(io, (uint32_t)((uintptr_t)base + offset));
+        shell_io_write_string(io, ": ");
 
         for (size_t i = 0; i < HEXDUMP_BYTES_PER_LINE; ++i) {
             if (i < line_count) {
-                tty_write_hex8(base[offset + i]);
+                io_write_hex8(io, base[offset + i]);
             } else {
-                tty_write_string("  ");
+                shell_io_write_string(io, "  ");
             }
-            tty_putc(' ');
+            shell_io_putc(io, ' ');
         }
 
-        tty_putc(' ');
-        write_ascii(&base[offset], line_count);
-        tty_putc('\n');
+        shell_io_putc(io, ' ');
+        write_ascii(io, &base[offset], line_count);
+        shell_io_putc(io, '\n');
 
         offset += line_count;
     }
 }
 
-static void hexdump_handler(int argc, char **argv)
+static void hexdump_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc < 2 || argc > 3) {
-        tty_write_string("Usage: hexdump <address> [length]\n");
+        shell_io_write_string(io, "Usage: hexdump <address> [length]\n");
         return;
     }
 
@@ -115,17 +114,17 @@ static void hexdump_handler(int argc, char **argv)
     size_t length = 128u;
 
     if (!parse_unsigned(argv[1], &address)) {
-        tty_write_string("Invalid address. Use decimal or 0x-prefixed hex.\n");
+        shell_io_write_string(io, "Invalid address. Use decimal or 0x-prefixed hex.\n");
         return;
     }
 
     if (argc == 3 && !parse_unsigned(argv[2], &length)) {
-        tty_write_string("Invalid length. Use decimal or 0x-prefixed hex.\n");
+        shell_io_write_string(io, "Invalid length. Use decimal or 0x-prefixed hex.\n");
         return;
     }
 
     if (!length) {
-        tty_write_string("Length must be greater than zero.\n");
+        shell_io_write_string(io, "Length must be greater than zero.\n");
         return;
     }
 
@@ -133,7 +132,7 @@ static void hexdump_handler(int argc, char **argv)
         length = HEXDUMP_MAX_BYTES;
     }
 
-    tty_write_string("Dumping ");
+    shell_io_write_string(io, "Dumping ");
     char length_msg[16];
     size_t tmp = length;
     size_t idx = 0;
@@ -146,13 +145,13 @@ static void hexdump_handler(int argc, char **argv)
         }
     }
     while (idx) {
-        tty_putc(length_msg[--idx]);
+        shell_io_putc(io, length_msg[--idx]);
     }
-    tty_write_string(" bytes from 0x");
-    tty_write_hex32((uint32_t)address);
-    tty_putc('\n');
+    shell_io_write_string(io, " bytes from 0x");
+    io_write_hex32(io, (uint32_t)address);
+    shell_io_putc(io, '\n');
 
-    hexdump_region((const uint8_t *)address, length);
+    hexdump_region(io, (const uint8_t *)address, length);
 }
 
 const struct shell_command shell_command_hexdump = {

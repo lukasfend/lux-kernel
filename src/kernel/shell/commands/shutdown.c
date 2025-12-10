@@ -1,6 +1,7 @@
 #include <lux/io.h>
 #include <lux/shell.h>
-#include <lux/tty.h>
+#include <lux/time.h> 
+
 
 /**
  * Shut down the system by attempting ACPI power-off and stopping the CPU.
@@ -8,12 +9,13 @@
  * Writes "Powering off...\n" to the TTY, issues ACPI power-off values (0x2000)
  * to I/O ports 0x604 and 0xB004, then halts the CPU in an infinite loop.
  */
-static void shutdown_handler(int argc, char **argv)
+static void shutdown_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
     (void)argv;
 
-    tty_write_string("Powering off...\n");
+    shell_io_write_string(io, "Powering off...\n");
+    sleep_ms(1000);
 
     // Attempt to power off via common QEMU ACPI ports.
     outw(0x604, 0x2000);
