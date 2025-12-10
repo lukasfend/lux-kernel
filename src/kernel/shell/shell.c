@@ -5,6 +5,7 @@
  */
 #include <lux/keyboard.h>
 #include <lux/shell.h>
+#include <stdbool.h>
 #include <string.h>
 #include <lux/tty.h>
 
@@ -37,7 +38,140 @@ static void prompt(void)
     tty_write_string("lux> ");
 }
 
-static size_t read_line(char *buffer, size_t capacity)
+static size_t common_prefix_len(const char *a, const char *b)
+{
+    size_t len = 0;
+    while (a[len] && b[len] && a[len] == b[len]) {
+        ++len;
+    }
+    return len;
+}
+
+static bool command_matches_prefix(const char *name, const char *prefix, size_t prefix_len)
+{
+    if (!prefix_len) {
+        return true;
+    }
+
+    for (size_t i = 0; i < prefix_len; ++i) {
+        if (!name[i] || name[i] != prefix[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool buffer_has_space(const char *buffer, size_t len)
+{
+    for (size_t i = 0; i < len; ++i) {
+        if (buffer[i] == ' ') {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void redraw_prompt_with_buffer(const char *buffer, size_t len)
+{
+    prompt();
+    for (size_t i = 0; i < len; ++i) {
+        tty_putc(buffer[i]);
+    }
+}
+
+static void list_matches(const char *buffer, size_t len, const struct shell_command *const *commands, size_t command_count)
+{
+    tty_putc('\n');
+    for (size_t i = 0; i < command_count; ++i) {
+        const char *name = commands[i]->name;
+        if (command_matches_prefix(name, buffer, len)) {
+            tty_write_string(name);
+            tty_putc('\n');
+        }
+    }
+    redraw_prompt_with_buffer(buffer, len);
+}
+
+static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, const struct shell_command *const *commands, size_t command_count)
+{
+    if (!commands || !command_count) {
+        return;
+    }
+
+    if (!*len) {
+        list_matches(buffer, *len, commands, command_count);
+        return;
+    }
+
+    if (buffer_has_space(buffer, *len)) {
+        tty_putc('\a');
+        return;
+    }
+
+    size_t prefix_len = *len;
+    size_t match_count = 0;
+    const char *first_name = 0;
+    size_t shared_len = 0;
+
+    for (size_t i = 0; i < command_count; ++i) {
+        const char *name = commands[i]->name;
+        if (!command_matches_prefix(name, buffer, prefix_len)) {
+            continue;
+        }
+
+        if (!match_count) {
+            first_name = name;
+            shared_len = strlen(name);
+        } else {
+            size_t common = common_prefix_len(first_name, name);
+            if (common < shared_len) {
+                shared_len = common;
+            }
+        }
+        ++match_count;
+    }
+
+    if (!match_count) {
+        tty_putc('\a');
+        return;
+    }
+
+    size_t appended = 0;
+    if (shared_len > prefix_len) {
+        size_t to_add = shared_len - prefix_len;
+        size_t room = (capacity - 1u) - prefix_len;
+        if (to_add > room) {
+            to_add = room;
+        }
+
+        if (to_add && first_name) {
+            memcpy(buffer + prefix_len, first_name + prefix_len, to_add);
+            appended = to_add;
+            *len += to_add;
+            buffer[*len] = '\0';
+            for (size_t i = 0; i < to_add; ++i) {
+                tty_putc(buffer[prefix_len + i]);
+            }
+        }
+    }
+
+    if (match_count == 1 && first_name) {
+        size_t name_len = strlen(first_name);
+        if (*len == name_len && *len + 1 < capacity) {
+            buffer[*len] = ' ';
+            ++(*len);
+            buffer[*len] = '\0';
+            tty_putc(' ');
+        }
+        return;
+    }
+
+    if (match_count > 1 && appended == 0) {
+        list_matches(buffer, *len, commands, command_count);
+    }
+}
+
+static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
 
@@ -61,6 +195,11 @@ static size_t read_line(char *buffer, size_t capacity)
                 --len;
                 tty_putc('\b');
             }
+            continue;
+        }
+
+        if (c == '\t') {
+            handle_tab_completion(buffer, &len, capacity, commands, command_count);
             continue;
         }
 
@@ -130,7 +269,7 @@ void shell_run(void)
 
     for (;;) {
         prompt();
-        size_t len = read_line(buffer, sizeof(buffer));
+        size_t len = read_line(buffer, sizeof(buffer), commands, command_count);
         if (!len) {
             continue;
         }
