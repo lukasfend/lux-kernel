@@ -3,3 +3,8 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: Boolean type definitions placeholder for freestanding build.
  */
+#pragma once
+
+#define bool _Bool
+#define true 1
+#define false 0
