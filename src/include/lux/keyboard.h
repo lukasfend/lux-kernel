@@ -5,4 +5,10 @@
  */
 #pragma once
 
+enum keyboard_layout {
+	KEYBOARD_LAYOUT_EN_US = 0,
+	KEYBOARD_LAYOUT_DE_DE,
+};
+
+void keyboard_set_layout(enum keyboard_layout layout);
 char keyboard_read_char(void);
