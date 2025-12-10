@@ -10,18 +10,39 @@
 #define NOISE_FRAMES 300U
 #define NOISE_DELAY_ITER 200000U
 
+/**
+ * Advance the internal pseudo-random generator and return the next value.
+ *
+ * The generator maintains internal state across calls; each invocation updates
+ * that state and yields a new 32-bit pseudo-random value.
+ *
+ * @returns The next 32-bit pseudo-random value from the generator.
+ */
 static uint32_t noise_rand(void) {
     static uint32_t state = 0xC0FFEE01U;
     state = 1664525U * state + 1013904223U;
     return state;
 }
 
+/**
+ * Introduces a short busy-wait delay by looping NOISE_DELAY_ITER times.
+ *
+ * The loop executes a processor `pause` instruction each iteration to reduce
+ * CPU pipeline/branch effects while waiting.
+ */
 static void noise_delay(void) {
     for(volatile uint32_t i = 0; i < NOISE_DELAY_ITER; ++i) {
         __asm__ volatile("pause");
     }
 }
 
+/**
+ * Render one frame of visual noise to the terminal by filling every cell with a randomly
+ * selected glyph and text attribute.
+ *
+ * The function writes to each terminal row and column so that the entire visible screen
+ * is updated with the noise frame.
+ */
 static void draw_noise_frame(void)
 {
     static const uint8_t palette[] = {
@@ -47,6 +68,12 @@ static void draw_noise_frame(void)
     }
 }
 
+/**
+ * Render animated random noise to the terminal for a fixed duration.
+ *
+ * Clears the terminal, repeatedly draws a sequence of noise frames with
+ * inter-frame delays, then clears the terminal and writes "Noise done.".
+ */
 static void noise_handler(int argc, char **argv) {
     (void)argc;
     (void)argv;

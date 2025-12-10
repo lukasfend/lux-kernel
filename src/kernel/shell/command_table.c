@@ -6,6 +6,12 @@ extern const struct shell_command shell_command_shutdown;
 extern const struct shell_command shell_command_clear;
 extern const struct shell_command shell_command_noise;
 
+/**
+ * Provide the table of built-in shell commands.
+ *
+ * @param count Optional output. If non-NULL, set to the number of entries in the returned table.
+ * @returns Pointer to a static array of pointers to the built-in `struct shell_command`; the array and its elements remain valid for the program lifetime.
+ */
 const struct shell_command *const *shell_builtin_commands(size_t *count)
 {
     static const struct shell_command *const builtin[] = {
