@@ -43,13 +43,13 @@ static void noise_delay(void) {
 static void draw_noise_frame(void)
 {
     static const uint8_t palette[] = {
-        (0x0u << 4) | 0xF, /* white on black */
-        (0x0u << 4) | 0x7, /* light gray on black */
-        (0x8u << 4) | 0xF, /* white on dark gray */
-        (0x7u << 4) | 0x0, /* black on light gray */
-        (0x8u << 4) | 0x7, /* light gray on dark gray */
+        (0x0u << 4) | 0xA, /* light green on black */
+        (0x0u << 4) | 0x2, /* green on black */
+        (0x2u << 4) | 0xA, /* light green on green */
+        (0xAu << 4) | 0x0, /* black on light green */
+        (0x2u << 4) | 0x0, /* black on green */
     };
-    static const char glyphs[] = { '#', ' ' };
+    static const char glyphs[] = { '1','2','3','4','5','6','7','8','9' };
 
     const size_t rows = tty_rows();
     const size_t cols = tty_cols();
