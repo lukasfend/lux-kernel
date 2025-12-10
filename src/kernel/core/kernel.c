@@ -10,7 +10,7 @@
 /**
  * Display the kernel banner on the primary TTY.
  *
- * Writes the fixed banner text "lux-kernel\n" to the configured terminal output.
+ * Writes the fixed banner string "lux-kernel by Lukas Fend (c) 2025\n" to the configured terminal output.
  */
 static void banner(void)
 {

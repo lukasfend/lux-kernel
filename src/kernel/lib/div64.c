@@ -5,6 +5,15 @@
  */
 #include <stdint.h>
 
+/**
+ * Compute the unsigned 64-bit quotient of numerator divided by denominator and
+ * optionally store the remainder.
+ *
+ * @param numerator The dividend.
+ * @param denominator The divisor.
+ * @param remainder If non-null, receives the remainder after division; set to 0 when denominator is 0.
+ * @returns The quotient (numerator / denominator). Returns 0 when denominator is 0.
+ */
 unsigned long long __udivmoddi4(unsigned long long numerator,
                                 unsigned long long denominator,
                                 unsigned long long *remainder)

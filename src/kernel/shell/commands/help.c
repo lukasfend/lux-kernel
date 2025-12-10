@@ -1,14 +1,14 @@
 #include <lux/shell.h>
 
 /**
- * Print a formatted list of built-in shell commands to the TTY.
+ * Display the list of built-in shell commands and their help text using the provided IO.
  *
- * Obtains the list of registered built-in commands and writes a header
- * "Available commands:" followed by each command's name and help text on
- * its own line.
+ * Writes a header "Available commands:" followed by each command name and its help
+ * text on a separate line to the given shell IO implementation.
  *
- * @param argc Unused command argument count.
- * @param argv Unused command argument vector.
+ * @param argc Ignored.
+ * @param argv Ignored.
+ * @param io IO interface used to emit the header and command entries.
  */
 static void help_handler(int argc, char **argv, const struct shell_io *io)
 {

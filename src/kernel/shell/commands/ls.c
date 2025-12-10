@@ -1,5 +1,14 @@
 #include <lux/shell.h>
 
+/**
+ * Handle the "ls" shell command by emitting stub messages.
+ *
+ * This handler ignores its argc/argv arguments and writes two informational
+ * lines to the provided shell_io indicating that filesystem directory listing
+ * is not yet supported.
+ *
+ * @param io I/O interface to write output to.
+ */
 static void ls_handler(int argc, char **argv, const struct shell_io *io)
 {
     (void)argc;
