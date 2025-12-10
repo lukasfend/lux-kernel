@@ -2,12 +2,28 @@ ORG 0x7C00
 BITS 16
 
 start:
-    mov ah, 0Eh
-    mov al, 'A'
-    mov bx, 0
-    int 0x10 ; Interrupts: https://www.ctyme.com/intr/int.htm
-    
+    mov si, message
+    call print
     jmp $ ; HALT
+
+
+print:
+    mov bx, 0
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    call print_char
+    jmp .loop
+.done:
+    ret
+
+print_char:
+    mov ah, 0Eh
+    int 0x10 ; Interrupts: https://www.ctyme.com/intr/int.htm
+    ret
+
+message: db 'debug test 123', 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
