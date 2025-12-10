@@ -8,17 +8,44 @@ _start:
 times 33 db 0
 
 start:
-    jmp 0x7c0:step2
+    jmp 0x7C0:step2
+
+handle_zero:
+    mov ah, 0Eh
+    mov al, 'A'
+    mov bx, 0x00
+    int 0x10
+    iret
+
+handle_one:
+    mov ah, 0Eh
+    mov al, 'V'
+    mov bx, 0x00
+    int 0x10
+    iret
 
 step2:
     cli ; Clear interrupts
-    mov ax, 0x7c0
+    mov ax, 0x7C0
     mov ds, ax
     mov es, ax
     mov ax, 0x00
     mov ss, ax
     mov sp, 0x7C00
     sti ; Enable interrupts
+
+    ; Set interrupt vector table; stack segment -> assign interrupt logic
+    ; Exceptions: https://wiki.osdev.org/Exceptions 
+    ; Interrupt 0
+    mov word[ss:0x00], handle_zero
+    mov word[ss:0x02], 0x7C0
+
+    ; Interrupt 1
+    mov word[ss:0x04], handle_one
+    mov word[ss:0x06], 0x7C0
+
+    mov ax, 0x00
+    div ax
 
     mov si, message
     call print
