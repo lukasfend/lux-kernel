@@ -14,6 +14,8 @@
 #define HISTORY_SIZE 16
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
+#define SHELL_CTRL_C 0x03
+#define TYPEAHEAD_CAPACITY INPUT_BUFFER_SIZE
 
 /**
  * Compute the length of a C string up to a maximum limit.
@@ -44,6 +46,18 @@ struct shell_pipe_buffer {
 static char history[HISTORY_SIZE][INPUT_BUFFER_SIZE];
 static size_t history_count;
 static size_t history_head;
+
+static char pending_keys[TYPEAHEAD_CAPACITY];
+static size_t pending_head;
+static size_t pending_tail;
+static size_t pending_count;
+static bool shell_interrupt_requested;
+static bool shell_interrupt_announced;
+
+static bool pending_input_push(char c);
+static bool pending_input_pop(char *c);
+static char read_char_with_pending(void);
+static void shell_interrupt_reset_state(void);
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
 
@@ -126,6 +140,7 @@ static void tty_writer(void *context, const char *data, size_t len)
  */
 void shell_io_write(const struct shell_io *io, const char *data, size_t len)
 {
+    shell_interrupt_poll();
     if (!io || !io->write || !data || !len) {
         return;
     }
@@ -140,6 +155,7 @@ void shell_io_write(const struct shell_io *io, const char *data, size_t len)
  */
 void shell_io_putc(const struct shell_io *io, char c)
 {
+    shell_interrupt_poll();
     shell_io_write(io, &c, 1u);
 }
 
@@ -157,6 +173,25 @@ void shell_io_write_string(const struct shell_io *io, const char *str)
         return;
     }
     shell_io_write(io, str, strlen(str));
+}
+
+bool shell_interrupt_poll(void)
+{
+    char c;
+    while (keyboard_poll_char(&c)) {
+        if ((unsigned char)c == (unsigned char)SHELL_CTRL_C) {
+            shell_interrupt_requested = true;
+        } else {
+            pending_input_push(c);
+        }
+    }
+
+    if (shell_interrupt_requested && !shell_interrupt_announced) {
+        tty_write_string("^C\n");
+        shell_interrupt_announced = true;
+    }
+
+    return shell_interrupt_requested;
 }
 
 /**
@@ -214,6 +249,48 @@ static const char *history_get(size_t offset)
     }
     size_t index = (history_head + HISTORY_SIZE - 1u - offset) % HISTORY_SIZE;
     return history[index];
+}
+
+static bool pending_input_push(char c)
+{
+    if (pending_count >= TYPEAHEAD_CAPACITY) {
+        return false;
+    }
+
+    pending_keys[pending_head] = c;
+    pending_head = (pending_head + 1u) % TYPEAHEAD_CAPACITY;
+    ++pending_count;
+    return true;
+}
+
+static bool pending_input_pop(char *c)
+{
+    if (!pending_count) {
+        return false;
+    }
+
+    if (c) {
+        *c = pending_keys[pending_tail];
+    }
+
+    pending_tail = (pending_tail + 1u) % TYPEAHEAD_CAPACITY;
+    --pending_count;
+    return true;
+}
+
+static char read_char_with_pending(void)
+{
+    char buffered;
+    if (pending_input_pop(&buffered)) {
+        return buffered;
+    }
+    return keyboard_read_char();
+}
+
+static void shell_interrupt_reset_state(void)
+{
+    shell_interrupt_requested = false;
+    shell_interrupt_announced = false;
 }
 
 /**
@@ -492,9 +569,18 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
     char saved_current[INPUT_BUFFER_SIZE];
 
     while (len + 1 < capacity) {
-        char c = keyboard_read_char();
+        char c = read_char_with_pending();
         if (!c) {
             continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)SHELL_CTRL_C) {
+            tty_write_string("^C\n");
+            buffer[0] = '\0';
+            len = 0;
+            history_offset = -1;
+            saved_current_valid = false;
+            return 0;
         }
 
         if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_UP) {
@@ -745,6 +831,10 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
 
         cmd->handler(argc, argv_local, &io);
 
+        if (shell_interrupt_poll()) {
+            return false;
+        }
+
         if (has_next) {
             pipe_storage_len = pipe_buffer.length;
             memcpy(pipe_storage, pipe_buffer.data, pipe_storage_len + 1u);
@@ -784,6 +874,7 @@ void shell_run(void)
     tty_write_string("Type 'help' for a list of commands.\n");
 
     for (;;) {
+        shell_interrupt_reset_state();
         prompt();
         size_t len = read_line(buffer, sizeof(buffer), commands, command_count);
         if (!len) {

@@ -152,3 +152,7 @@ Press `Ctrl+C` in the host terminal to stop QEMU.
 - Expand the shell with filesystem-style commands once storage drivers exist.
 
 Have fun hacking on lux-kernel! If you get stuck, re-read the sections above—they walk through every moving part of the current system.
+
+## TODOS:
+* Fix shell interrupts being handled in he command executors - use a global system instead
+* Optimize for usage visually - using a 640x480 display with at least 16 colors.

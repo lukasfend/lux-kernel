@@ -243,3 +243,24 @@ void tty_write_cell(size_t row, size_t col, char c, uint8_t color)
 
     VGA_MEMORY[row * VGA_WIDTH + col] = (uint16_t) color << 8 | (uint8_t) c;
 }
+char tty_get_cell_character(size_t row, size_t col)
+{
+    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
+    {
+        return '\0';
+    }
+
+    uint16_t entry = VGA_MEMORY[row * VGA_WIDTH + col];
+    return (char)(entry & 0xFF);
+}
+
+uint8_t tty_get_cell_color(size_t row, size_t col)
+{
+    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
+    {
+        return 0;
+    }
+
+    uint16_t entry = VGA_MEMORY[row * VGA_WIDTH + col];
+    return (uint8_t)(entry >> 8);
+}

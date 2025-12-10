@@ -26,12 +26,16 @@ static uint32_t noise_rand(void) {
 }
 
 /**
- * Delay execution for the configured frame interval.
- *
- * Uses NOISE_FRAME_DELAY_MS to determine the delay duration in milliseconds.
+ * Delay execution for the configured frame interval while allowing interrupts.
  */
-static void noise_delay(void) {
-    sleep_ms(NOISE_FRAME_DELAY_MS);
+static bool noise_delay(void) {
+    for (uint32_t i = 0; i < NOISE_FRAME_DELAY_MS; ++i) {
+        if (shell_interrupt_poll()) {
+            return false;
+        }
+        sleep_ms(1);
+    }
+    return true;
 }
 
 /**
@@ -78,8 +82,17 @@ static void noise_handler(int argc, char **argv, const struct shell_io *io) {
     tty_clear();
 
     for(uint32_t frame = 0; frame < NOISE_FRAMES; ++frame) {
+        if (shell_interrupt_poll()) {
+            tty_clear();
+            return;
+        }
+
         draw_noise_frame();
-        noise_delay(); 
+
+        if (!noise_delay()) {
+            tty_clear();
+            return;
+        }
     }
     tty_clear();
     shell_io_write_string(io, "Noise done.\n");

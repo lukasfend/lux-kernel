@@ -8,6 +8,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct tty_cell
+{
+    char character;
+    uint8_t color;
+};
+
+
 void tty_init(uint8_t color);
 void tty_set_color(uint8_t color);
 void tty_putc(char c);
@@ -18,3 +25,5 @@ void tty_clear(void);
 size_t tty_rows(void);
 size_t tty_cols(void);
 void tty_write_cell(size_t row, size_t col, char c, uint8_t color);
+char tty_get_cell_character(size_t row, size_t col);
+uint8_t tty_get_cell_color(size_t row, size_t col);

@@ -137,6 +137,8 @@ static const struct keyboard_layout_map *current_layout = &layout_de_de;
 
 static bool left_shift_pressed;
 static bool right_shift_pressed;
+static bool left_ctrl_pressed;
+static bool right_ctrl_pressed;
 static bool caps_lock_active;
 static bool extended_scancode_pending;
 static bool alt_gr_active;
@@ -222,6 +224,30 @@ static char translate_extended_scancode(uint8_t scancode)
     }
 }
 
+static bool control_modifier_active(void)
+{
+    return left_ctrl_pressed || right_ctrl_pressed;
+}
+
+static bool is_control_mappable(char c)
+{
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        return true;
+    }
+    return false;
+}
+
+static char apply_control_mapping(char c)
+{
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - 'a' + 1);
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 1);
+    }
+    return c;
+}
+
 /**
  * Set the active keyboard layout used for scancode-to-character translation.
  *
@@ -253,11 +279,91 @@ void keyboard_set_layout(enum keyboard_layout layout)
  *
  * @returns The next character translated according to the current keyboard
  *          layout. */
-char keyboard_read_char(void)
+static bool keyboard_process_scancode(uint8_t scancode, bool is_extended, char *out_char)
 {
+    if (scancode & 0x80) {
+        uint8_t make_code = scancode & 0x7F;
+        if (make_code == 0x2A) {
+            left_shift_pressed = false;
+        } else if (make_code == 0x36) {
+            right_shift_pressed = false;
+        } else if (make_code == 0x38 && is_extended) {
+            alt_gr_active = false;
+        } else if (make_code == 0x1D) {
+            if (is_extended) {
+                right_ctrl_pressed = false;
+            } else {
+                left_ctrl_pressed = false;
+            }
+        }
+        return false;
+    }
+
+    if (is_extended) {
+        if (scancode == 0x38) {
+            alt_gr_active = true;
+            return false;
+        }
+
+        if (scancode == 0x1D) {
+            right_ctrl_pressed = true;
+            return false;
+        }
+
+        char extended = translate_extended_scancode(scancode);
+        if (extended) {
+            *out_char = extended;
+            return true;
+        }
+        return false;
+    }
+
+    if (scancode == 0x2A) {
+        left_shift_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x36) {
+        right_shift_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x1D) {
+        left_ctrl_pressed = true;
+        return false;
+    }
+
+    if (scancode == 0x38) {
+        return false;
+    }
+
+    if (scancode == 0x3A) {
+        caps_lock_active = !caps_lock_active;
+        return false;
+    }
+
+    char translated = translate_scancode(scancode);
+    if (!translated) {
+        return false;
+    }
+
+    if (control_modifier_active() && is_control_mappable(translated)) {
+        translated = apply_control_mapping(translated);
+    }
+
+    *out_char = translated;
+    return true;
+}
+
+bool keyboard_poll_char(char *out_char)
+{
+    if (!out_char) {
+        return false;
+    }
+
     for (;;) {
         if (!(inb(KEYBOARD_STATUS_PORT) & KEYBOARD_STATUS_OUT_BUFFER)) {
-            continue;
+            return false;
         }
 
         uint8_t scancode = inb(KEYBOARD_DATA_PORT);
@@ -273,53 +379,17 @@ char keyboard_read_char(void)
             extended_scancode_pending = false;
         }
 
-        if (scancode & 0x80) {
-            uint8_t make_code = scancode & 0x7F;
-            if (make_code == 0x2A) {
-                left_shift_pressed = false;
-            } else if (make_code == 0x36) {
-                right_shift_pressed = false;
-            } else if (make_code == 0x38 && is_extended) {
-                alt_gr_active = false;
-            }
-            continue;
-        }
-
-        if (is_extended) {
-            if (scancode == 0x38) {
-                alt_gr_active = true;
-                continue;
-            }
-
-            char extended = translate_extended_scancode(scancode);
-            if (extended) {
-                return extended;
-            }
-            continue;
-        }
-
-        if (scancode == 0x2A) {
-            left_shift_pressed = true;
-            continue;
-        }
-
-        if (scancode == 0x36) {
-            right_shift_pressed = true;
-            continue;
-        }
-
-        if (scancode == 0x38) {
-            continue;
-        }
-
-        if (scancode == 0x3A) {
-            caps_lock_active = !caps_lock_active;
-            continue;
-        }
-
-        char translated = translate_scancode(scancode);
-        if (translated) {
-            return translated;
+        if (keyboard_process_scancode(scancode, is_extended, out_char)) {
+            return true;
         }
     }
+}
+
+char keyboard_read_char(void)
+{
+    char result;
+    while (!keyboard_poll_char(&result)) {
+        continue;
+    }
+    return result;
 }

@@ -52,6 +52,18 @@ static bool parse_u32(const char *text, uint32_t *value)
  * @param argv Argument vector where argv[0] is the command name and argv[1] is the milliseconds value.
  * @param io   Shell I/O interface used to write usage or error messages.
  */
+static bool sleep_interruptible(uint32_t duration)
+{
+    for (uint32_t elapsed = 0; elapsed < duration; ++elapsed) {
+        if (shell_interrupt_poll()) {
+            return false;
+        }
+        sleep_ms(1);
+    }
+
+    return true;
+}
+
 static void sleep_handler(int argc, char **argv, const struct shell_io *io)
 {
     if (argc != 2) {
@@ -65,7 +77,7 @@ static void sleep_handler(int argc, char **argv, const struct shell_io *io)
         return;
     }
 
-    sleep_ms(duration);
+    sleep_interruptible(duration);
 }
 
 const struct shell_command shell_command_sleep = {
