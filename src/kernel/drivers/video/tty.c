@@ -22,7 +22,8 @@ static uint16_t make_entry(char c)
 
 static void tty_scroll(void)
 {
-    if (cursor_row < VGA_HEIGHT) {
+    if (cursor_row < VGA_HEIGHT)
+    {
         return;
     }
 
@@ -33,7 +34,8 @@ static void tty_scroll(void)
             row_bytes * visible_rows);
 
     uint16_t blank = make_entry(' ');
-    for (size_t col = 0; col < VGA_WIDTH; ++col) {
+    for (size_t col = 0; col < VGA_WIDTH; ++col)
+    {
         VGA_MEMORY[(VGA_HEIGHT - 1) * VGA_WIDTH + col] = blank;
     }
 
@@ -44,10 +46,12 @@ static void tty_sync_cursor(void)
 {
     size_t row = cursor_row;
     size_t col = cursor_col;
-    if (row >= VGA_HEIGHT) {
+    if (row >= VGA_HEIGHT)
+    {
         row = VGA_HEIGHT - 1;
     }
-    if (col >= VGA_WIDTH) {
+    if (col >= VGA_WIDTH)
+    {
         col = VGA_WIDTH - 1;
     }
 
@@ -65,7 +69,8 @@ void tty_init(uint8_t color)
     cursor_col = 0;
 
     uint16_t blank = make_entry(' ');
-    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i)
+    {
         VGA_MEMORY[i] = blank;
     }
 
@@ -79,7 +84,8 @@ void tty_set_color(uint8_t color)
 
 void tty_putc(char c)
 {
-    if (c == '\n') {
+    if (c == '\n')
+    {
         cursor_col = 0;
         ++cursor_row;
         tty_scroll();
@@ -87,16 +93,21 @@ void tty_putc(char c)
         return;
     }
 
-    if (c == '\r') {
+    if (c == '\r')
+    {
         cursor_col = 0;
         tty_sync_cursor();
         return;
     }
 
-    if (c == '\b') {
-        if (cursor_col > 0) {
+    if (c == '\b')
+    {
+        if (cursor_col > 0)
+        {
             --cursor_col;
-        } else if (cursor_row > 0) {
+        }
+        else if (cursor_row > 0)
+        {
             --cursor_row;
             cursor_col = VGA_WIDTH - 1;
         }
@@ -106,7 +117,8 @@ void tty_putc(char c)
     }
 
     VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = make_entry(c);
-    if (++cursor_col >= VGA_WIDTH) {
+    if (++cursor_col >= VGA_WIDTH)
+    {
         cursor_col = 0;
         ++cursor_row;
     }
@@ -116,7 +128,8 @@ void tty_putc(char c)
 
 void tty_write(const char *data, size_t len)
 {
-    for (size_t i = 0; i < len; ++i) {
+    for (size_t i = 0; i < len; ++i)
+    {
         tty_putc(data[i]);
     }
 }
@@ -126,12 +139,35 @@ void tty_write_string(const char *str)
     tty_write(str, strlen(str));
 }
 
-void tty_clear(void) {
+void tty_clear(void)
+{
+
     cursor_row = 0;
     cursor_col = 0;
     uint16_t blank = make_entry(' ');
-    for(size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i)
+    {
         VGA_MEMORY[i] = blank;
     }
     tty_sync_cursor();
+}
+
+size_t tty_rows(void)
+{
+    return VGA_HEIGHT;
+}
+
+size_t tty_cols(void)
+{
+    return VGA_WIDTH;
+}
+
+void tty_write_cell(size_t row, size_t col, char c, uint8_t color)
+{
+    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
+    {
+        return;
+    }
+
+    VGA_MEMORY[row * VGA_WIDTH + col] = (uint16_t) color << 8 | (uint8_t) c;
 }

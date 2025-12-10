@@ -14,3 +14,7 @@ void tty_putc(char c);
 void tty_write(const char *data, size_t len);
 void tty_write_string(const char *str);
 void tty_clear(void);
+
+size_t tty_rows(void);
+size_t tty_cols(void);
+void tty_write_cell(size_t row, size_t col, char c, uint8_t color);
