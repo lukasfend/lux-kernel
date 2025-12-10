@@ -1,17 +1,17 @@
-#include <stdint.h>
+#include <shell.h>
 #include <tty.h>
 
 static void banner(void)
 {
     tty_write_string("lux-kernel\n");
-    tty_write_string("Runtime primitives online.\n\n");
+    tty_write_string("Runtime primitives online.\n");
 }
 
 void kmain(void)
 {
     tty_init(0x1F);
     banner();
-    tty_write_string("You can now experiment with freestanding C code.\n");
+    shell_run();
 
     for (;;) {
         __asm__ volatile ("hlt");

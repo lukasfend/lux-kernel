@@ -58,6 +58,15 @@ int memcmp(const void *lhs, const void *rhs, size_t len)
     return 0;
 }
 
+int strcmp(const char *lhs, const char *rhs)
+{
+    while (*lhs && (*lhs == *rhs)) {
+        ++lhs;
+        ++rhs;
+    }
+    return (unsigned char)*lhs - (unsigned char)*rhs;
+}
+
 size_t strlen(const char *str)
 {
     const char *s = str;

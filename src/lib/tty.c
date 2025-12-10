@@ -60,6 +60,22 @@ void tty_putc(char c)
         return;
     }
 
+    if (c == '\r') {
+        cursor_col = 0;
+        return;
+    }
+
+    if (c == '\b') {
+        if (cursor_col > 0) {
+            --cursor_col;
+        } else if (cursor_row > 0) {
+            --cursor_row;
+            cursor_col = VGA_WIDTH - 1;
+        }
+        VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = make_entry(' ');
+        return;
+    }
+
     VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = make_entry(c);
     if (++cursor_col >= VGA_WIDTH) {
         cursor_col = 0;

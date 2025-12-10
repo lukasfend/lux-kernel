@@ -16,7 +16,6 @@ _start:
     mov ss, ax
     mov esp, 0x00200000
     mov ebp, esp
-    sti
 
     call kmain
 

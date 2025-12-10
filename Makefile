@@ -24,10 +24,7 @@ BOOT_BIN   := $(BIN_DIR)/boot.bin
 OS_IMAGE   := $(BIN_DIR)/os.bin
 SECTOR_DEF := $(BUILD_DIR)/kernel_sectors.inc
 
-C_SOURCES := \
-	src/kernel.c \
-	src/lib/string.c \
-	src/lib/tty.c
+C_SOURCES := $(shell find src -name '*.c')
 
 C_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
 ASM_OBJS := $(BUILD_DIR)/kernel_entry.o
