@@ -38,6 +38,7 @@ start:
     mov [boot_drive], dl
 
     call load_kernel
+    call set_video_mode
     call enable_a20
     cli
     lgdt [gdt_descriptor]
@@ -81,6 +82,11 @@ load_next_sector:
     add dword [dap_lba_low], 1
     adc dword [dap_lba_high], 0
     loop load_next_sector
+    ret
+
+set_video_mode:
+    mov ax, 0x0012
+    int 0x10
     ret
 
 disk_error:

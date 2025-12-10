@@ -1,102 +1,255 @@
 /*
  * Date: 2025-12-10 00:00 UTC
  * Author: Lukas Fend <lukas.fend@outlook.com>
- * Description: VGA text-mode terminal implementation with scrolling and cursor management.
+ * Description: 640x480x16 planar VGA terminal with software rendered glyphs.
  */
-#include <lux/io.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
+
+#include <lux/io.h>
 #include <lux/tty.h>
 
-static volatile uint16_t *const VGA_MEMORY = (uint16_t *)0xB8000;
-static const size_t VGA_WIDTH = 80;
-static const size_t VGA_HEIGHT = 25;
+#include "font8x8_basic.h"
 
-static size_t cursor_row = 0;
-static size_t cursor_col = 0;
-static uint8_t current_color = 0x07;
+#define SCREEN_WIDTH          640u
+#define SCREEN_HEIGHT         480u
+#define CELL_WIDTH            8u
+#define CELL_HEIGHT           16u
+#define VGA_BYTES_PER_SCANLINE (SCREEN_WIDTH / 8u)
+#define VGA_MEMORY_SIZE       0x10000u
 
-static uint16_t make_entry(char c)
+#define TTY_COLS (SCREEN_WIDTH / CELL_WIDTH)
+#define TTY_ROWS (SCREEN_HEIGHT / CELL_HEIGHT)
+#define CURSOR_INVALID ((size_t)(-1))
+
+#define VGA_SEQ_INDEX 0x3C4
+#define VGA_SEQ_DATA  0x3C5
+#define VGA_GC_INDEX  0x3CE
+#define VGA_GC_DATA   0x3CF
+
+static volatile uint8_t *const VGA_MEMORY = (volatile uint8_t *)0xA0000u;
+
+static size_t cursor_row;
+static size_t cursor_col;
+static uint8_t current_color;
+static struct tty_cell cells[TTY_ROWS * TTY_COLS];
+static size_t cursor_overlay_row = CURSOR_INVALID;
+static size_t cursor_overlay_col = CURSOR_INVALID;
+
+static inline size_t tty_cell_index(size_t row, size_t col)
 {
-    return (uint16_t)current_color << 8 | (uint8_t)c;
+    return row * TTY_COLS + col;
 }
 
-/**
- * Scrolls the text buffer up by one line when the cursor is beyond the bottom of the screen.
- *
- * If the cursor is within the visible region, no action is taken. When scrolling is required,
- * the visible contents move up one row, the last row is cleared to space characters using the
- * current text color attribute, and `cursor_row` is placed on the last visible row.
- */
-static void tty_scroll(void)
+static inline size_t vga_offset(size_t x, size_t y)
 {
-    if (cursor_row < VGA_HEIGHT)
-    {
+    return y * VGA_BYTES_PER_SCANLINE + (x / 8u);
+}
+
+static inline uint8_t vga_bit_mask(size_t x)
+{
+    return (uint8_t)(0x80u >> (x & 7u));
+}
+
+static inline void vga_set_map_mask(uint8_t mask)
+{
+    outb(VGA_SEQ_INDEX, 0x02);
+    outb(VGA_SEQ_DATA, mask);
+}
+
+static inline void vga_select_read_plane(uint8_t plane)
+{
+    outb(VGA_GC_INDEX, 0x04);
+    outb(VGA_GC_DATA, plane);
+}
+
+static void vga_program_palette(void)
+{
+    static const uint8_t palette[16][3] = {
+        {0x00, 0x00, 0x00}, {0x00, 0x00, 0x2A}, {0x00, 0x2A, 0x00}, {0x00, 0x2A, 0x2A},
+        {0x2A, 0x00, 0x00}, {0x2A, 0x00, 0x2A}, {0x2A, 0x15, 0x00}, {0x2A, 0x2A, 0x2A},
+        {0x15, 0x15, 0x15}, {0x15, 0x15, 0x3F}, {0x15, 0x3F, 0x15}, {0x15, 0x3F, 0x3F},
+        {0x3F, 0x15, 0x15}, {0x3F, 0x15, 0x3F}, {0x3F, 0x3F, 0x15}, {0x3F, 0x3F, 0x3F}
+    };
+
+    outb(0x3C8, 0x00);
+    for (size_t i = 0; i < 16; ++i) {
+        outb(0x3C9, palette[i][0]);
+        outb(0x3C9, palette[i][1]);
+        outb(0x3C9, palette[i][2]);
+    }
+}
+
+static void vga_clear_screen(void)
+{
+    vga_set_map_mask(0x0F);
+    memset((void *)VGA_MEMORY, 0x00, VGA_MEMORY_SIZE);
+}
+
+static void vga_set_pixel(size_t x, size_t y, uint8_t color)
+{
+    if (x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT) {
         return;
     }
 
-    const size_t row_bytes = VGA_WIDTH * sizeof(uint16_t);
-    const size_t visible_rows = VGA_HEIGHT - 1;
-    memmove((void *)VGA_MEMORY,
-            (const void *)(VGA_MEMORY + VGA_WIDTH),
-            row_bytes * visible_rows);
+    color &= 0x0F;
+    size_t offset = vga_offset(x, y);
+    uint8_t mask = vga_bit_mask(x);
 
-    uint16_t blank = make_entry(' ');
-    for (size_t col = 0; col < VGA_WIDTH; ++col)
-    {
-        VGA_MEMORY[(VGA_HEIGHT - 1) * VGA_WIDTH + col] = blank;
+    for (uint8_t plane = 0; plane < 4u; ++plane) {
+        uint8_t plane_mask = (uint8_t)(1u << plane);
+        vga_set_map_mask(plane_mask);
+        vga_select_read_plane(plane);
+
+        volatile uint8_t *dst = VGA_MEMORY + offset;
+        uint8_t value = *dst;
+        if (color & plane_mask) {
+            value |= mask;
+        } else {
+            value &= (uint8_t)~mask;
+        }
+        *dst = value;
     }
-
-    cursor_row = VGA_HEIGHT - 1;
 }
 
-/**
- * Synchronize the VGA text-mode hardware cursor with the current internal cursor position.
- *
- * Clamps internal row/column to the visible screen bounds before updating the hardware
- * cursor so the displayed cursor always lies within [0, VGA_HEIGHT-1] x [0, VGA_WIDTH-1].
- */
-static void tty_sync_cursor(void)
+static uint8_t glyph_row_bits(uint8_t ch, size_t scanline)
 {
-    size_t row = cursor_row;
-    size_t col = cursor_col;
-    if (row >= VGA_HEIGHT)
-    {
-        row = VGA_HEIGHT - 1;
+    if (ch >= 128) {
+        ch = '?';
     }
-    if (col >= VGA_WIDTH)
-    {
-        col = VGA_WIDTH - 1;
-    }
-
-    uint16_t pos = (uint16_t)(row * VGA_WIDTH + col);
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, pos & 0xFF);
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (pos >> 8) & 0xFF);
+    return font8x8_basic[ch][scanline / 2u];
 }
 
-/**
- * Initialize the TTY driver state and clear the display.
- *
- * Sets the active text attribute to `color`, resets the cursor position to the
- * top-left corner, fills the entire VGA text buffer with spaces using the
- * chosen attribute, and updates the hardware cursor to the new position.
- *
- * @param color VGA text attribute byte to use for subsequent output.
- */
+static void tty_draw_glyph(size_t row, size_t col)
+{
+    if (row >= TTY_ROWS || col >= TTY_COLS) {
+        return;
+    }
+
+    size_t idx = tty_cell_index(row, col);
+    struct tty_cell cell = cells[idx];
+    uint8_t fg = cell.color & 0x0F;
+    uint8_t bg = (cell.color >> 4) & 0x0F;
+    uint8_t ch = cell.character ? (uint8_t)cell.character : ' ';
+    if (ch >= 128) {
+        ch = '?';
+    }
+
+    size_t base_x = col * CELL_WIDTH;
+    size_t base_y = row * CELL_HEIGHT;
+
+    for (size_t y = 0; y < CELL_HEIGHT; ++y) {
+        uint8_t bits = glyph_row_bits(ch, y);
+        for (size_t x = 0; x < CELL_WIDTH; ++x) {
+            uint8_t color = (bits & (uint8_t)(0x80u >> x)) ? fg : bg;
+            vga_set_pixel(base_x + x, base_y + y, color);
+        }
+    }
+}
+
+static void tty_draw_cursor_block(size_t row, size_t col)
+{
+    if (row >= TTY_ROWS || col >= TTY_COLS) {
+        return;
+    }
+
+    const struct tty_cell *cell = &cells[tty_cell_index(row, col)];
+    uint8_t fg = cell->color & 0x0F;
+    uint8_t bg = (cell->color >> 4) & 0x0F;
+    uint8_t cursor_color = (fg == bg) ? (uint8_t)(fg ^ 0x0F) : fg;
+    cursor_color &= 0x0F;
+
+    size_t base_x = col * CELL_WIDTH;
+    size_t base_y = row * CELL_HEIGHT + CELL_HEIGHT - 2u;
+
+    for (size_t y = 0; y < 2u; ++y) {
+        for (size_t x = 0; x < CELL_WIDTH; ++x) {
+            vga_set_pixel(base_x + x, base_y + y, cursor_color);
+        }
+    }
+}
+
+static void tty_redraw_cursor(void)
+{
+    if (cursor_overlay_row < TTY_ROWS && cursor_overlay_col < TTY_COLS) {
+        tty_draw_glyph(cursor_overlay_row, cursor_overlay_col);
+    }
+
+    cursor_overlay_row = cursor_row;
+    cursor_overlay_col = cursor_col;
+
+    if (cursor_overlay_row < TTY_ROWS && cursor_overlay_col < TTY_COLS) {
+        tty_draw_glyph(cursor_overlay_row, cursor_overlay_col);
+        tty_draw_cursor_block(cursor_overlay_row, cursor_overlay_col);
+    }
+}
+
+static void tty_render_screen(void)
+{
+    for (size_t row = 0; row < TTY_ROWS; ++row) {
+        for (size_t col = 0; col < TTY_COLS; ++col) {
+            tty_draw_glyph(row, col);
+        }
+    }
+
+    cursor_overlay_row = CURSOR_INVALID;
+    cursor_overlay_col = CURSOR_INVALID;
+    tty_redraw_cursor();
+}
+
+static void tty_scroll(void)
+{
+    if (cursor_row < TTY_ROWS) {
+        return;
+    }
+
+    size_t overflow = cursor_row - (TTY_ROWS - 1u);
+    if (!overflow) {
+        overflow = 1u;
+    }
+    if (overflow > TTY_ROWS) {
+        overflow = TTY_ROWS;
+    }
+
+    size_t keep_rows = TTY_ROWS - overflow;
+    size_t moved_cells = keep_rows * TTY_COLS;
+    memmove(cells, cells + overflow * TTY_COLS, moved_cells * sizeof(struct tty_cell));
+
+    struct tty_cell blank = {
+        .character = ' ',
+        .color = current_color
+    };
+    size_t start = keep_rows * TTY_COLS;
+    size_t total_cells = TTY_ROWS * TTY_COLS;
+    for (size_t i = start; i < total_cells; ++i) {
+        cells[i] = blank;
+    }
+
+    cursor_row = TTY_ROWS - 1u;
+    tty_render_screen();
+}
+
 void tty_init(uint8_t color)
 {
     current_color = color;
     cursor_row = 0;
     cursor_col = 0;
+    cursor_overlay_row = CURSOR_INVALID;
+    cursor_overlay_col = CURSOR_INVALID;
 
-    uint16_t blank = make_entry(' ');
-    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i)
-    {
-        VGA_MEMORY[i] = blank;
+    vga_program_palette();
+    vga_clear_screen();
+
+    struct tty_cell blank = {
+        .character = ' ',
+        .color = color
+    };
+    for (size_t i = 0; i < TTY_ROWS * TTY_COLS; ++i) {
+        cells[i] = blank;
     }
 
-    tty_sync_cursor();
+    tty_render_screen();
 }
 
 void tty_set_color(uint8_t color)
@@ -104,205 +257,150 @@ void tty_set_color(uint8_t color)
     current_color = color;
 }
 
-/**
- * Write a single character to the VGA text console at the current cursor position.
- *
- * Handles control characters specially: `'\n'` moves the cursor to the start of the next line and triggers scrolling if needed; `'\r'` moves the cursor to the start of the current line; `'\b'` (backspace) moves the cursor left (wrapping to the previous line when at column 0) and clears the cell. For all other characters, the character is written at the cursor and the cursor is advanced, wrapping to the next line and triggering scroll when necessary. The hardware cursor is synchronized after any change.
- */
 void tty_putc(char c)
 {
-    if (c == '\n')
-    {
+    if (c == '\n') {
         cursor_col = 0;
         ++cursor_row;
         tty_scroll();
-        tty_sync_cursor();
+        tty_redraw_cursor();
         return;
     }
 
-    if (c == '\r')
-    {
+    if (c == '\r') {
         cursor_col = 0;
-        tty_sync_cursor();
+        tty_redraw_cursor();
         return;
     }
 
-    if (c == '\b')
-    {
-        if (cursor_col > 0)
-        {
+    if (c == '\b') {
+        if (cursor_col > 0) {
             --cursor_col;
-        }
-        else if (cursor_row > 0)
-        {
+        } else if (cursor_row > 0) {
             --cursor_row;
-            cursor_col = VGA_WIDTH - 1;
+            cursor_col = TTY_COLS ? TTY_COLS - 1u : 0u;
         }
-        VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = make_entry(' ');
-        tty_sync_cursor();
+        size_t idx = tty_cell_index(cursor_row, cursor_col);
+        cells[idx].character = ' ';
+        cells[idx].color = current_color;
+        tty_draw_glyph(cursor_row, cursor_col);
+        tty_redraw_cursor();
         return;
     }
 
-    VGA_MEMORY[cursor_row * VGA_WIDTH + cursor_col] = make_entry(c);
-    if (++cursor_col >= VGA_WIDTH)
-    {
+    if (cursor_row >= TTY_ROWS) {
+        tty_scroll();
+    }
+
+    size_t row = cursor_row;
+    size_t col = cursor_col;
+    size_t idx = tty_cell_index(row, col);
+    cells[idx].character = c;
+    cells[idx].color = current_color;
+    tty_draw_glyph(row, col);
+
+    ++cursor_col;
+    if (cursor_col >= TTY_COLS) {
         cursor_col = 0;
         ++cursor_row;
     }
+
     tty_scroll();
-    tty_sync_cursor();
+    tty_redraw_cursor();
 }
 
-/**
- * Write a sequence of characters to the terminal.
- *
- * Writes `len` bytes from `data` to the active text console. Control characters
- * such as newline (`'\n'`), carriage return (`'\r'`), and backspace (`'\b'`)
- * are interpreted and affect cursor position and scrolling.
- *
- * @param data Pointer to the buffer containing characters to write.
- * @param len  Number of characters to write from `data`.
- */
 void tty_write(const char *data, size_t len)
 {
-    for (size_t i = 0; i < len; ++i)
-    {
+    for (size_t i = 0; i < len; ++i) {
         tty_putc(data[i]);
     }
 }
 
-/**
- * Write a null-terminated string to the terminal using the current text color.
- *
- * @param str Null-terminated C string whose characters will be written starting
- *            at the current cursor position; the cursor will advance and the
- *            display will scroll as needed.
- */
 void tty_write_string(const char *str)
 {
     tty_write(str, strlen(str));
 }
 
-/**
- * Clear the text console and reset the cursor to the top-left corner.
- *
- * Fills the entire VGA text buffer with space characters using the current
- * color attribute, sets the internal cursor position to row 0, column 0,
- * and updates the hardware text-mode cursor to match.
- */
 void tty_clear(void)
 {
+    struct tty_cell blank = {
+        .character = ' ',
+        .color = current_color
+    };
+    for (size_t i = 0; i < TTY_ROWS * TTY_COLS; ++i) {
+        cells[i] = blank;
+    }
 
     cursor_row = 0;
     cursor_col = 0;
-    uint16_t blank = make_entry(' ');
-    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i)
-    {
-        VGA_MEMORY[i] = blank;
-    }
-    tty_sync_cursor();
+    vga_clear_screen();
+    tty_render_screen();
 }
 
-/**
- * Get the number of text-mode rows on the VGA screen.
- * @returns The number of text-mode rows (screen height).
- */
 size_t tty_rows(void)
 {
-    return VGA_HEIGHT;
+    return TTY_ROWS;
 }
 
-/**
- * Get the number of columns in the text-mode screen.
- *
- * @returns Number of columns (width) of the VGA text-mode display.
- */
 size_t tty_cols(void)
 {
-    return VGA_WIDTH;
+    return TTY_COLS;
 }
 
-/**
- * Write a character with a color attribute to a specific screen cell.
- *
- * Writes `c` with the VGA text-mode attribute `color` into the video buffer at
- * the given zero-based `row` and `col`. If `row` or `col` is outside the
- * visible screen bounds, the function returns without modifying video memory.
- *
- * @param row Zero-based row index (0..VGA_HEIGHT-1).
- * @param col Zero-based column index (0..VGA_WIDTH-1).
- * @param c Character to write at the specified cell.
- * @param color VGA text-mode attribute byte (foreground/background and flags).
- */
 void tty_write_cell(size_t row, size_t col, char c, uint8_t color)
 {
-    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
-    {
+    if (row >= TTY_ROWS || col >= TTY_COLS) {
         return;
     }
 
-    VGA_MEMORY[row * VGA_WIDTH + col] = (uint16_t) color << 8 | (uint8_t) c;
+    size_t idx = tty_cell_index(row, col);
+    cells[idx].character = c;
+    cells[idx].color = color;
+    tty_draw_glyph(row, col);
+
+    if (row == cursor_row && col == cursor_col) {
+        tty_redraw_cursor();
+    }
 }
-/**
- * Retrieve the ASCII character stored in the text-mode VGA cell at the given coordinates.
- *
- * @param row Zero-based row index (0 to VGA_HEIGHT - 1).
- * @param col Zero-based column index (0 to VGA_WIDTH - 1).
- * @returns The character stored in the specified cell, or `'\0'` if the coordinates are out of bounds.
- */
+
 char tty_get_cell_character(size_t row, size_t col)
 {
-    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
-    {
+    if (row >= TTY_ROWS || col >= TTY_COLS) {
         return '\0';
     }
 
-    uint16_t entry = VGA_MEMORY[row * VGA_WIDTH + col];
-    return (char)(entry & 0xFF);
+    return cells[tty_cell_index(row, col)].character;
 }
 
-/**
- * Retrieve the VGA color attribute byte stored at the given text-mode cell.
- *
- * @param row Zero-based row index of the cell.
- * @param col Zero-based column index of the cell.
- * @returns The color attribute byte from the cell at (row, col); returns 0 if (row, col) is outside the screen bounds.
- */
 uint8_t tty_get_cell_color(size_t row, size_t col)
 {
-    if (row >= VGA_HEIGHT || col >= VGA_WIDTH)
-    {
+    if (row >= TTY_ROWS || col >= TTY_COLS) {
         return 0;
     }
 
-    uint16_t entry = VGA_MEMORY[row * VGA_WIDTH + col];
-    return (uint8_t)(entry >> 8);
+    return cells[tty_cell_index(row, col)].color;
 }
 
 void tty_set_cursor_position(size_t row, size_t col)
 {
-    if (row >= VGA_HEIGHT)
-    {
-        row = VGA_HEIGHT - 1;
+    if (row >= TTY_ROWS) {
+        row = TTY_ROWS ? TTY_ROWS - 1u : 0u;
     }
-    if (col >= VGA_WIDTH)
-    {
-        col = VGA_WIDTH - 1;
+    if (col >= TTY_COLS) {
+        col = TTY_COLS ? TTY_COLS - 1u : 0u;
     }
 
     cursor_row = row;
     cursor_col = col;
-    tty_sync_cursor();
+    tty_redraw_cursor();
 }
 
 void tty_get_cursor_position(size_t *row, size_t *col)
 {
-    if (row)
-    {
+    if (row) {
         *row = cursor_row;
     }
-    if (col)
-    {
+    if (col) {
         *col = cursor_col;
     }
 }

@@ -1100,6 +1100,59 @@ bool fs_touch(const char *path)
 }
 
 /**
+ * Create a new directory at the specified filesystem path.
+ *
+ * Fails if the filesystem is not ready, the path is invalid, the parent
+ * directory cannot be resolved, or an entry with the same name already
+ * exists. Intermediate directories are not created automatically.
+ *
+ * @param path Filesystem path of the directory to create.
+ * @returns `true` if the directory was created successfully, `false` otherwise.
+ */
+bool fs_mkdir(const char *path)
+{
+    if (!fs_ready() || !path) {
+        return false;
+    }
+
+    uint32_t existing = 0;
+    if (luxfs_resolve(path, &existing)) {
+        return false;
+    }
+
+    uint32_t parent = 0;
+    char leaf[FS_NAME_MAX];
+    if (!luxfs_resolve_parent(path, &parent, leaf)) {
+        return false;
+    }
+
+    if (!leaf[0] || (leaf[0] == '.' && (leaf[1] == '\0' || (leaf[1] == '.' && leaf[2] == '\0')))) {
+        return false;
+    }
+
+    if (luxfs_dir_find(parent, leaf, &existing)) {
+        return false;
+    }
+
+    uint32_t inode_index = 0;
+    if (!luxfs_alloc_inode(LUXFS_NODE_DIR, parent, &inode_index)) {
+        return false;
+    }
+
+    struct luxfs_dir_record record;
+    memset(&record, 0, sizeof(record));
+    record.inode = inode_index;
+    luxfs_copy_name(record.name, leaf);
+
+    if (!luxfs_dir_append_record(parent, &record)) {
+        luxfs_mark_inode_free(inode_index);
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * List the directory entries for a filesystem path or emit a single entry for a file.
  *
  * If `path` refers to a directory, invokes `cb` for each directory entry found.
