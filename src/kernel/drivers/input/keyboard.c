@@ -16,6 +16,7 @@
 struct keyboard_layout_map {
     const char normal[KEYBOARD_MAP_SIZE];
     const char shifted[KEYBOARD_MAP_SIZE];
+    const char altgr[KEYBOARD_MAP_SIZE];
 };
 
 static const struct keyboard_layout_map layout_en_us = {
@@ -50,6 +51,24 @@ static const struct keyboard_layout_map layout_en_us = {
         0, 0, 0, 0, 0, 0, 0, '7', '8', '9', '-', '4', '5', '6', '+', '1',
         /* 0x50 - 0x5F */
         '2', '3', '0', '.', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x60 - 0x6F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x70 - 0x7F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    },
+    .altgr = {
+        /* 0x00 - 0x0F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x10 - 0x1F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x20 - 0x2F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x30 - 0x3F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x40 - 0x4F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x50 - 0x5F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x60 - 0x6F */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x70 - 0x7F */
@@ -93,6 +112,24 @@ static const struct keyboard_layout_map layout_de_de = {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         /* 0x70 - 0x7F */
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    },
+    .altgr = {
+        /* 0x00 - 0x0F */
+        0, 0, 0, '\xB2', '\xB3', 0, 0, 0, '{', '[', ']', '}', '\\', 0, 0, 0,
+        /* 0x10 - 0x1F */
+        '@', 0, '\x80', /* € */ 0, 0, 0, 0, 0, 0, 0, 0, '~', 0, 0, 0, 0,
+        /* 0x20 - 0x2F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x30 - 0x3F */
+        0, 0, '\xB5', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x40 - 0x4F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x50 - 0x5F */
+        0, 0, 0, 0, 0, 0, '|', 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x60 - 0x6F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* 0x70 - 0x7F */
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     }
 };
 
@@ -102,6 +139,7 @@ static bool left_shift_pressed;
 static bool right_shift_pressed;
 static bool caps_lock_active;
 static bool extended_scancode_pending;
+static bool alt_gr_active;
 
 static bool is_letter_char(char c)
 {
@@ -131,9 +169,14 @@ static char translate_scancode(uint8_t scancode)
     const struct keyboard_layout_map *layout = current_layout;
     char normal = layout->normal[scancode];
     char shifted = layout->shifted[scancode];
+    char altgr = layout->altgr[scancode];
     bool is_letter = is_letter_char(normal);
     bool shift_active = left_shift_pressed || right_shift_pressed;
     bool use_shifted = shift_active;
+
+    if (alt_gr_active && altgr) {
+        return altgr;
+    }
 
     if (caps_lock_active && is_letter) {
         use_shifted = !use_shifted;
@@ -173,9 +216,10 @@ char keyboard_read_char(void)
             continue;
         }
 
+        bool is_extended = false;
         if (extended_scancode_pending) {
+            is_extended = true;
             extended_scancode_pending = false;
-            continue;
         }
 
         if (scancode & 0x80) {
@@ -184,6 +228,15 @@ char keyboard_read_char(void)
                 left_shift_pressed = false;
             } else if (make_code == 0x36) {
                 right_shift_pressed = false;
+            } else if (make_code == 0x38 && is_extended) {
+                alt_gr_active = false;
+            }
+            continue;
+        }
+
+        if (is_extended) {
+            if (scancode == 0x38) {
+                alt_gr_active = true;
             }
             continue;
         }
@@ -195,6 +248,10 @@ char keyboard_read_char(void)
 
         if (scancode == 0x36) {
             right_shift_pressed = true;
+            continue;
+        }
+
+        if (scancode == 0x38) {
             continue;
         }
 
