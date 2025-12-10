@@ -10,6 +10,7 @@ extern const struct shell_command shell_command_hexdump;
 extern const struct shell_command shell_command_ls;
 extern const struct shell_command shell_command_cat;
 extern const struct shell_command shell_command_sleep;
+extern const struct shell_command shell_command_printf;
 
 /**
  * Provide the table of built-in shell commands.
@@ -29,7 +30,8 @@ const struct shell_command *const *shell_builtin_commands(size_t *count)
         &shell_command_hexdump,
         &shell_command_ls,
         &shell_command_cat,
-        &shell_command_sleep
+        &shell_command_sleep,
+        &shell_command_printf
     };
 
     if (count) {
