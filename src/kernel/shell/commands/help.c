@@ -1,6 +1,16 @@
 #include <lux/shell.h>
 #include <lux/tty.h>
 
+/**
+ * Print a formatted list of built-in shell commands to the TTY.
+ *
+ * Obtains the list of registered built-in commands and writes a header
+ * "Available commands:" followed by each command's name and help text on
+ * its own line.
+ *
+ * @param argc Unused command argument count.
+ * @param argv Unused command argument vector.
+ */
 static void help_handler(int argc, char **argv)
 {
     (void)argc;

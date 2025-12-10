@@ -2,6 +2,12 @@
 #include <lux/shell.h>
 #include <lux/tty.h>
 
+/**
+ * Shut down the system by attempting ACPI power-off and stopping the CPU.
+ *
+ * Writes "Powering off...\n" to the TTY, issues ACPI power-off values (0x2000)
+ * to I/O ports 0x604 and 0xB004, then halts the CPU in an infinite loop.
+ */
 static void shutdown_handler(int argc, char **argv)
 {
     (void)argc;

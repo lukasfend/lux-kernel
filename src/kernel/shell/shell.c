@@ -11,6 +11,14 @@
 #define INPUT_BUFFER_SIZE 128
 #define MAX_ARGS 8
 
+/**
+ * Locate a shell command by name in a supplied array of command pointers.
+ *
+ * @param name Null-terminated command name to search for.
+ * @param commands Array of pointers to `struct shell_command` to search.
+ * @param command_count Number of elements in `commands`.
+ * @return Pointer to the matching `struct shell_command`, or NULL if no match is found.
+ */
 static const struct shell_command *find_command(const char *name, const struct shell_command *const *commands, size_t command_count)
 {
     for (size_t i = 0; i < command_count; ++i) {
@@ -21,6 +29,9 @@ static const struct shell_command *find_command(const char *name, const struct s
     return 0;
 }
 
+/**
+ * Write the shell prompt "lux> " to the TTY.
+ */
 static void prompt(void)
 {
     tty_write_string("lux> ");
@@ -61,6 +72,13 @@ static size_t read_line(char *buffer, size_t capacity)
     return len;
 }
 
+/**
+ * Split a mutable input line into space-separated tokens and store pointers to them in argv up to max_args.
+ * @param line Modifiable null-terminated string containing the input; spaces are replaced with `'\0'` to terminate tokens.
+ * @param argv Array to receive pointers to the start of each token.
+ * @param max_args Maximum number of tokens to store in `argv`.
+ * @returns The number of tokens parsed and stored in `argv`.
+ */
 static int tokenize(char *line, char **argv, int max_args)
 {
     int argc = 0;
@@ -86,6 +104,16 @@ static int tokenize(char *line, char **argv, int max_args)
     return argc;
 }
 
+/**
+ * Run the interactive shell loop.
+ *
+ * Initializes builtin commands and, if available, enters a read-evaluate loop that:
+ * displays a prompt, reads a line from the keyboard, tokenizes it into arguments,
+ * looks up a matching command by name, and invokes the command's handler.
+ *
+ * If no builtin commands are registered, writes an error message and returns without
+ * entering the interactive loop. All user interaction is performed via the TTY.
+ */
 void shell_run(void)
 {
     char buffer[INPUT_BUFFER_SIZE];

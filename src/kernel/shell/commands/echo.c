@@ -1,6 +1,15 @@
 #include <lux/shell.h>
 #include <lux/tty.h>
 
+/**
+ * Print provided command-line arguments to the TTY as a single line.
+ *
+ * Writes argv[1] through argv[argc-1] to the TTY separated by single spaces,
+ * then terminates the line with a newline character.
+ *
+ * @param argc Number of elements in argv.
+ * @param argv Array of argument strings; argv[0] (the command name) is ignored.
+ */
 static void echo_handler(int argc, char **argv)
 {
     for (int i = 1; i < argc; ++i) {
