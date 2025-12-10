@@ -14,7 +14,7 @@
  */
 static void banner(void)
 {
-    tty_write_string("lux-kernel\n");
+    tty_write_string("lux-kernel by Lukas Fend (c) 2025\n");
 }
 
 /**
