@@ -12,12 +12,13 @@
 
 #include "font8x8_basic.h"
 
-#define SCREEN_WIDTH          640u
-#define SCREEN_HEIGHT         480u
-#define CELL_WIDTH            8u
-#define CELL_HEIGHT           16u
+#define SCREEN_WIDTH           640u
+#define SCREEN_HEIGHT          480u
+#define CELL_WIDTH             8u
+#define CELL_HEIGHT            16u
+#define CURSOR_HEIGHT          2u
 #define VGA_BYTES_PER_SCANLINE (SCREEN_WIDTH / 8u)
-#define VGA_MEMORY_SIZE       0x10000u
+#define VGA_MEMORY_SIZE        0x10000u
 
 #define TTY_COLS (SCREEN_WIDTH / CELL_WIDTH)
 #define TTY_ROWS (SCREEN_HEIGHT / CELL_HEIGHT)
@@ -36,35 +37,20 @@ static uint8_t current_color;
 static struct tty_cell cells[TTY_ROWS * TTY_COLS];
 static size_t cursor_overlay_row = CURSOR_INVALID;
 static size_t cursor_overlay_col = CURSOR_INVALID;
+static uint8_t framebuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
 
 static inline size_t tty_cell_index(size_t row, size_t col)
 {
     return row * TTY_COLS + col;
 }
 
-static inline size_t vga_offset(size_t x, size_t y)
-{
-    return y * VGA_BYTES_PER_SCANLINE + (x / 8u);
-}
-
-static inline uint8_t vga_bit_mask(size_t x)
-{
-    return (uint8_t)(0x80u >> (x & 7u));
-}
-
 static inline void vga_set_map_mask(uint8_t mask)
 {
-    outb(VGA_SEQ_INDEX, 0x02);
+    outb(VGA_SEQ_INDEX, 0x02u);
     outb(VGA_SEQ_DATA, mask);
 }
 
-static inline void vga_select_read_plane(uint8_t plane)
-{
-    outb(VGA_GC_INDEX, 0x04);
-    outb(VGA_GC_DATA, plane);
-}
-
-static void vga_program_palette(void)
+static inline void vga_program_palette(void)
 {
     static const uint8_t palette[16][3] = {
         {0x00, 0x00, 0x00}, {0x00, 0x00, 0x2A}, {0x00, 0x2A, 0x00}, {0x00, 0x2A, 0x2A},
@@ -81,36 +67,10 @@ static void vga_program_palette(void)
     }
 }
 
-static void vga_clear_screen(void)
+static inline void vga_clear_screen(void)
 {
-    vga_set_map_mask(0x0F);
+    vga_set_map_mask(0x0Fu);
     memset((void *)VGA_MEMORY, 0x00, VGA_MEMORY_SIZE);
-}
-
-static void vga_set_pixel(size_t x, size_t y, uint8_t color)
-{
-    if (x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT) {
-        return;
-    }
-
-    color &= 0x0F;
-    size_t offset = vga_offset(x, y);
-    uint8_t mask = vga_bit_mask(x);
-
-    for (uint8_t plane = 0; plane < 4u; ++plane) {
-        uint8_t plane_mask = (uint8_t)(1u << plane);
-        vga_set_map_mask(plane_mask);
-        vga_select_read_plane(plane);
-
-        volatile uint8_t *dst = VGA_MEMORY + offset;
-        uint8_t value = *dst;
-        if (color & plane_mask) {
-            value |= mask;
-        } else {
-            value &= (uint8_t)~mask;
-        }
-        *dst = value;
-    }
 }
 
 static uint8_t glyph_row_bits(uint8_t ch, size_t scanline)
@@ -119,6 +79,35 @@ static uint8_t glyph_row_bits(uint8_t ch, size_t scanline)
         ch = '?';
     }
     return font8x8_basic[ch][scanline / 2u];
+}
+
+static void vga_flush_cell(size_t base_x, size_t base_y)
+{
+    size_t byte_col = base_x / 8u;
+    size_t max_row = base_y + CELL_HEIGHT;
+    if (max_row > SCREEN_HEIGHT) {
+        max_row = SCREEN_HEIGHT;
+    }
+
+    for (size_t row = base_y; row < max_row; ++row) {
+        size_t fb_offset = row * SCREEN_WIDTH + base_x;
+        size_t vga_byte = row * VGA_BYTES_PER_SCANLINE + byte_col;
+        uint8_t plane_bytes[4] = {0, 0, 0, 0};
+
+        for (size_t bit = 0; bit < CELL_WIDTH; ++bit) {
+            uint8_t color = framebuffer[fb_offset + bit] & 0x0F;
+            for (uint8_t plane = 0; plane < 4u; ++plane) {
+                plane_bytes[plane] |= (uint8_t)(((color >> plane) & 0x01u) << bit);
+            }
+        }
+
+        for (uint8_t plane = 0; plane < 4u; ++plane) {
+            vga_set_map_mask((uint8_t)(1u << plane));
+            VGA_MEMORY[vga_byte] = plane_bytes[plane];
+        }
+    }
+
+    vga_set_map_mask(0x0Fu);
 }
 
 static void tty_draw_glyph(size_t row, size_t col)
@@ -139,13 +128,21 @@ static void tty_draw_glyph(size_t row, size_t col)
     size_t base_x = col * CELL_WIDTH;
     size_t base_y = row * CELL_HEIGHT;
 
-    for (size_t y = 0; y < CELL_HEIGHT; ++y) {
+    for (size_t y = 0; y < CELL_HEIGHT && (base_y + y) < SCREEN_HEIGHT; ++y) {
+        size_t fb_offset = (base_y + y) * SCREEN_WIDTH + base_x;
+        for (size_t x = 0; x < CELL_WIDTH && (base_x + x) < SCREEN_WIDTH; ++x) {
+            framebuffer[fb_offset + x] = bg;
+        }
+
         uint8_t bits = glyph_row_bits(ch, y);
-        for (size_t x = 0; x < CELL_WIDTH; ++x) {
-            uint8_t color = (bits & (uint8_t)(0x80u >> x)) ? fg : bg;
-            vga_set_pixel(base_x + x, base_y + y, color);
+        for (size_t x = 0; x < CELL_WIDTH && (base_x + x) < SCREEN_WIDTH; ++x) {
+            if (bits & (uint8_t)(0x80u >> x)) {
+                framebuffer[fb_offset + x] = fg;
+            }
         }
     }
+
+    vga_flush_cell(base_x, base_y);
 }
 
 static void tty_draw_cursor_block(size_t row, size_t col)
@@ -161,13 +158,17 @@ static void tty_draw_cursor_block(size_t row, size_t col)
     cursor_color &= 0x0F;
 
     size_t base_x = col * CELL_WIDTH;
-    size_t base_y = row * CELL_HEIGHT + CELL_HEIGHT - 2u;
+    size_t base_y = row * CELL_HEIGHT;
+    size_t start_y = base_y + CELL_HEIGHT - CURSOR_HEIGHT;
 
-    for (size_t y = 0; y < 2u; ++y) {
-        for (size_t x = 0; x < CELL_WIDTH; ++x) {
-            vga_set_pixel(base_x + x, base_y + y, cursor_color);
+    for (size_t y = 0; y < CURSOR_HEIGHT && (start_y + y) < SCREEN_HEIGHT; ++y) {
+        size_t fb_offset = (start_y + y) * SCREEN_WIDTH + base_x;
+        for (size_t x = 0; x < CELL_WIDTH && (base_x + x) < SCREEN_WIDTH; ++x) {
+            framebuffer[fb_offset + x] = cursor_color;
         }
     }
+
+    vga_flush_cell(base_x, base_y);
 }
 
 static void tty_redraw_cursor(void)
@@ -238,6 +239,7 @@ void tty_init(uint8_t color)
     cursor_overlay_row = CURSOR_INVALID;
     cursor_overlay_col = CURSOR_INVALID;
 
+    memset(framebuffer, 0, sizeof(framebuffer));
     vga_program_palette();
     vga_clear_screen();
 
@@ -333,7 +335,6 @@ void tty_clear(void)
 
     cursor_row = 0;
     cursor_col = 0;
-    vga_clear_screen();
     tty_render_screen();
 }
 
