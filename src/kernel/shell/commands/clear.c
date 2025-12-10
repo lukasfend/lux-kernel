@@ -16,6 +16,8 @@
  * @param argv Argument array (ignored).
  */
 static void clear_handler(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
     tty_clear();
 }
 
