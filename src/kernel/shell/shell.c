@@ -11,19 +11,15 @@
 #define INPUT_BUFFER_SIZE 128
 #define MAX_ARGS 8
 
-struct command {
-    const char *name;
-    const char *help;
-    void (*handler)(int argc, char **argv);
-};
-
-static void cmd_help(int argc, char **argv);
-static void cmd_echo(int argc, char **argv);
-
-static const struct command commands[] = {
-    {"help", "List available commands", cmd_help},
-    {"echo", "Echo the provided text", cmd_echo},
-};
+static const struct shell_command *find_command(const char *name, const struct shell_command *const *commands, size_t command_count)
+{
+    for (size_t i = 0; i < command_count; ++i) {
+        if (strcmp(commands[i]->name, name) == 0) {
+            return commands[i];
+        }
+    }
+    return 0;
+}
 
 static void prompt(void)
 {
@@ -90,46 +86,17 @@ static int tokenize(char *line, char **argv, int max_args)
     return argc;
 }
 
-static const struct command *find_command(const char *name)
-{
-    for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
-        if (strcmp(commands[i].name, name) == 0) {
-            return &commands[i];
-        }
-    }
-    return 0;
-}
-
-static void cmd_help(int argc, char **argv)
-{
-    (void)argc;
-    (void)argv;
-
-    tty_write_string("Available commands:\n");
-    for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
-        tty_write_string("  ");
-        tty_write_string(commands[i].name);
-        tty_write_string(" - ");
-        tty_write_string(commands[i].help);
-        tty_putc('\n');
-    }
-}
-
-static void cmd_echo(int argc, char **argv)
-{
-    for (int i = 1; i < argc; ++i) {
-        tty_write_string(argv[i]);
-        if (i + 1 < argc) {
-            tty_putc(' ');
-        }
-    }
-    tty_putc('\n');
-}
-
 void shell_run(void)
 {
     char buffer[INPUT_BUFFER_SIZE];
     char *argv[MAX_ARGS];
+    size_t command_count = 0;
+    const struct shell_command *const *commands = shell_builtin_commands(&command_count);
+
+    if (!commands || !command_count) {
+        tty_write_string("Unable to start shell: no commands registered.\n");
+        return;
+    }
 
     tty_write_string("Type 'help' for a list of commands.\n");
 
@@ -145,7 +112,7 @@ void shell_run(void)
             continue;
         }
 
-        const struct command *cmd = find_command(argv[0]);
+        const struct shell_command *cmd = find_command(argv[0], commands, command_count);
         if (!cmd) {
             tty_write_string("Unknown command: ");
             tty_write_string(argv[0]);
