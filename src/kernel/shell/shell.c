@@ -3,6 +3,7 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: Minimal interactive shell handling input, parsing, and built-ins.
  */
+#include <lux/fs.h>
 #include <lux/interrupt.h>
 #include <lux/keyboard.h>
 #include <lux/shell.h>
@@ -16,6 +17,19 @@
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
 #define SHELL_CTRL_C 0x03
+
+struct shell_redirection {
+    bool active;
+    bool append;
+    char path[INPUT_BUFFER_SIZE];
+};
+
+struct shell_file_writer {
+    const struct shell_redirection *redir;
+    size_t offset;
+    bool truncate_pending;
+    bool failed;
+};
 
 /**
  * Compute the length of a C string up to a maximum limit.
@@ -163,6 +177,189 @@ static void pipe_buffer_writer(void *context, const char *data, size_t len)
     memcpy(buffer->data + buffer->length, data, len);
     buffer->length += len;
     buffer->data[buffer->length] = '\0';
+}
+
+static void trim_trailing_whitespace(char *text)
+{
+    if (!text) {
+        return;
+    }
+
+    size_t len = strlen(text);
+    while (len) {
+        char c = text[len - 1u];
+        if (c != ' ' && c != '\t') {
+            break;
+        }
+        text[len - 1u] = '\0';
+        --len;
+    }
+}
+
+static void shell_redirection_clear(struct shell_redirection *redir)
+{
+    if (!redir) {
+        return;
+    }
+    redir->active = false;
+    redir->append = false;
+    redir->path[0] = '\0';
+}
+
+static bool parse_redirection_from_segment(char *segment, struct shell_redirection *redir)
+{
+    if (!segment || !redir) {
+        return false;
+    }
+
+    shell_redirection_clear(redir);
+    bool seen = false;
+
+    for (char *cursor = segment; *cursor; ++cursor) {
+        if (*cursor != '>') {
+            continue;
+        }
+
+        if (seen) {
+            tty_write_string("Multiple output redirections are not supported.\n");
+            return false;
+        }
+        seen = true;
+
+        bool append = false;
+        *cursor = '\0';
+        ++cursor;
+        if (*cursor == '>') {
+            append = true;
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        if (!*cursor) {
+            tty_write_string("Redirection requires a target path.\n");
+            return false;
+        }
+
+        char *path_start = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\t') {
+            ++cursor;
+        }
+        char *path_end = cursor;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        if (*cursor) {
+            tty_write_string("Redirection accepts only a single target path.\n");
+            return false;
+        }
+
+        size_t path_len = (size_t)(path_end - path_start);
+        if (!path_len) {
+            tty_write_string("Redirection requires a target path.\n");
+            return false;
+        }
+
+        if (path_len >= sizeof(redir->path)) {
+            path_len = sizeof(redir->path) - 1u;
+        }
+        memcpy(redir->path, path_start, path_len);
+        redir->path[path_len] = '\0';
+        redir->append = append;
+        redir->active = true;
+        break;
+    }
+
+    trim_trailing_whitespace(segment);
+
+    if (!segment[0]) {
+        tty_write_string("Command missing before redirection.\n");
+        return false;
+    }
+
+    return true;
+}
+
+static bool shell_extract_redirection(char **segments, size_t segment_count, struct shell_redirection *redir)
+{
+    if (!segments || !segment_count || !redir) {
+        if (redir) {
+            shell_redirection_clear(redir);
+        }
+        return segment_count == 0;
+    }
+
+    return parse_redirection_from_segment(segments[segment_count - 1u], redir);
+}
+
+static bool shell_file_writer_init(struct shell_file_writer *writer, const struct shell_redirection *redir)
+{
+    if (!writer || !redir || !redir->active) {
+        return false;
+    }
+
+    writer->redir = redir;
+    writer->offset = 0;
+    writer->truncate_pending = !redir->append;
+    writer->failed = false;
+
+    if (!fs_ready()) {
+        tty_write_string("Filesystem not available for redirection.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (!fs_touch(redir->path)) {
+        tty_write_string("Unable to create redirection target.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (redir->append) {
+        struct fs_stat stats;
+        if (fs_stat_path(redir->path, &stats)) {
+            writer->offset = stats.size;
+        }
+    }
+
+    return true;
+}
+
+static void shell_file_writer_emit(void *context, const char *data, size_t len)
+{
+    struct shell_file_writer *writer = (struct shell_file_writer *)context;
+    if (!writer || writer->failed || !writer->redir || !data || !len) {
+        return;
+    }
+
+    bool truncate_now = writer->truncate_pending;
+    if (!fs_write(writer->redir->path, writer->offset, data, len, truncate_now)) {
+        tty_write_string("Redirection write failed.\n");
+        writer->failed = true;
+        return;
+    }
+
+    writer->truncate_pending = false;
+    writer->offset += len;
+}
+
+static void shell_file_writer_finalize(struct shell_file_writer *writer)
+{
+    if (!writer || writer->failed || !writer->redir) {
+        return;
+    }
+
+    if (writer->truncate_pending) {
+        fs_write(writer->redir->path, 0u, 0, 0u, true);
+        writer->truncate_pending = false;
+    }
 }
 
 /**
@@ -844,13 +1041,22 @@ static bool parse_pipeline(char *line, char **segments, size_t *segment_count)
  * @param segment_count Number of entries in `segments`.
  * @param commands Array of available `shell_command` pointers used for command lookup.
  * @param command_count Number of entries in `commands`.
+ * @param redir Optional redirection target applied to the output of the last pipeline stage.
  * @returns `true` if all pipeline segments were executed successfully, `false` if execution failed (e.g., empty segment or unknown command).
  */
-static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count)
+static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count, const struct shell_redirection *redir)
 {
     char pipe_storage[PIPE_BUFFER_CAPACITY];
     size_t pipe_storage_len = 0;
     bool pipe_storage_valid = false;
+    bool use_redirection = (redir && redir->active);
+    struct shell_file_writer file_writer;
+
+    if (use_redirection) {
+        if (!shell_file_writer_init(&file_writer, redir)) {
+            return false;
+        }
+    }
 
     for (size_t i = 0; i < segment_count; ++i) {
         char *argv_local[MAX_ARGS];
@@ -884,6 +1090,9 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
             pipe_buffer_init(&pipe_buffer);
             io.write = pipe_buffer_writer;
             io.context = &pipe_buffer;
+        } else if (use_redirection) {
+            io.write = shell_file_writer_emit;
+            io.context = &file_writer;
         } else {
             io.write = tty_writer;
             io.context = 0;
@@ -906,6 +1115,10 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
             pipe_storage_valid = false;
             pipe_storage_len = 0;
         }
+    }
+
+    if (use_redirection) {
+        shell_file_writer_finalize(&file_writer);
     }
 
     return true;
@@ -953,6 +1166,11 @@ void shell_run(void)
             continue;
         }
 
-        execute_pipeline(segments, segment_count, commands, command_count);
+        struct shell_redirection redirection;
+        if (!shell_extract_redirection(segments, segment_count, &redirection)) {
+            continue;
+        }
+
+        execute_pipeline(segments, segment_count, commands, command_count, &redirection);
     }
 }
