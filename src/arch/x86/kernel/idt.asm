@@ -103,6 +103,25 @@ idt_init:
     jmp .exception_loop
 
 .exception_done:
+    ; Set up IRQ0 handler (vector 0x20 = IRQ0, timer)
+    mov eax, irq_timer_handler
+    mov edx, idt_descriptors + (0x20 * 8)
+    
+    ; Set low 16 bits
+    mov ebx, eax
+    and ebx, 0xFFFF
+    mov [edx], bx
+    
+    ; Set code segment and gate type (interrupt gate, present, ring 0)
+    mov word [edx + 2], 0x08
+    mov byte [edx + 4], 0x00
+    mov byte [edx + 5], 0x8E    ; P=1, DPL=0, gate_type=interrupt
+    
+    ; Set high 16 bits
+    mov ebx, eax
+    shr ebx, 16
+    mov [edx + 6], bx
+    
     ; Set up IRQ handler (vector 0x21 = IRQ1, keyboard)
     mov eax, irq_keyboard_handler
     mov edx, idt_descriptors + (0x21 * 8)
@@ -145,8 +164,8 @@ idt_init:
     out PIC1_DATA, al
     out PIC2_DATA, al
     
-    ; Mask all interrupts except IRQ1 (keyboard)
-    mov al, 0xFD        ; 11111101 = enable IRQ1 only
+    ; Mask all interrupts except IRQ0 (timer) and IRQ1 (keyboard)
+    mov al, 0xFC        ; 11111100 = enable IRQ0 and IRQ1 only
     out PIC1_DATA, al
     mov al, 0xFF        ; mask all slave interrupts for now
     out PIC2_DATA, al
@@ -174,6 +193,32 @@ exception_handler_stub:
     cli
     hlt
     jmp exception_handler_stub
+
+; IRQ0 timer handler - acknowledge and call C handler
+global irq_timer_handler
+irq_timer_handler:
+    ; Push registers to preserve them
+    push eax
+    push ecx
+    push edx
+    push esi
+    push edi
+    
+    ; Call the C timer handler
+    call timer_irq_handler_c
+    
+    ; Send EOI (End of Interrupt) to master PIC
+    mov al, EOI
+    out PIC1_CMD, al
+    
+    ; Pop registers
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop eax
+    
+    iret
 
 ; IRQ keyboard handler - acknowledge and call C handler
 global irq_keyboard_handler
@@ -203,3 +248,4 @@ irq_keyboard_handler:
 
 ; C function that the interrupt handler will call
 extern keyboard_irq_handler_c
+extern timer_irq_handler_c
