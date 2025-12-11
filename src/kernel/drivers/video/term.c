@@ -4,6 +4,7 @@
  * Description: Off-screen terminal surface implementation for editor-style UIs.
  */
 #include <lux/term.h>
+#include <lux/tty.h>
 
 #include <lux/memory.h>
 #include <string.h>

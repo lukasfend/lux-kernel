@@ -18,7 +18,7 @@
 static bool wait_for_shutdown_delay(uint32_t milliseconds)
 {
     for (uint32_t elapsed = 0; elapsed < milliseconds; ++elapsed) {
-        if (shell_interrupt_poll()) {
+        if (shell_command_should_stop()) {
             return false;
         }
         sleep_ms(1);

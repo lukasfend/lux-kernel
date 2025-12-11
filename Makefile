@@ -22,6 +22,7 @@ ARCH_DIR  := src/arch/$(ARCH)
 
 BOOT_SRC        := $(ARCH_DIR)/boot/boot.asm
 KERNEL_ENTRY_SRC:= $(ARCH_DIR)/kernel/entry.asm
+KERNEL_IDT_SRC  := $(ARCH_DIR)/kernel/idt.asm
 LINKER_SCRIPT   := $(ARCH_DIR)/linker.ld
 
 KERNEL_ELF := $(BIN_DIR)/kernel.elf
@@ -33,7 +34,7 @@ SECTOR_DEF := $(BUILD_DIR)/kernel_sectors.inc
 C_SOURCES := $(shell find src/kernel -name '*.c')
 
 C_OBJS := $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES))
-ASM_OBJS := $(BUILD_DIR)/arch/$(ARCH)/kernel/entry.o
+ASM_OBJS := $(BUILD_DIR)/arch/$(ARCH)/kernel/entry.o $(BUILD_DIR)/arch/$(ARCH)/kernel/idt.o
 OBJS := $(ASM_OBJS) $(C_OBJS)
 
 .PHONY: all clean run qemu
@@ -62,6 +63,10 @@ $(KERNEL_ELF): $(OBJS) $(LINKER_SCRIPT) | $(BIN_DIR)
 	$(LD) -T $(LINKER_SCRIPT) $(LDFLAGS) -o $(KERNEL_ELF) $(OBJS)
 
 $(BUILD_DIR)/arch/$(ARCH)/kernel/entry.o: $(KERNEL_ENTRY_SRC) | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(AS) -f elf32 $(NASMFLAGS) $< -o $@
+
+$(BUILD_DIR)/arch/$(ARCH)/kernel/idt.o: $(KERNEL_IDT_SRC) | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(AS) -f elf32 $(NASMFLAGS) $< -o $@
 

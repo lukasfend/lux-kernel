@@ -266,15 +266,19 @@ static void less_render_page(const struct less_document *doc, size_t top_line, s
 }
 
 /**
- * Block until a keyboard character is available, polling for shell interrupts.
+ * Waits until a keyboard character is available or the shell requests stop.
  *
- * @returns A non-zero character read from the keyboard.
+ * Blocks by polling for input while checking for a shell stop request.
+ *
+ * @returns The character read from the keyboard, or `0` if a shell stop was requested.
  */
 static char less_wait_key(void)
 {
     char symbol = 0;
     while (!symbol) {
-        shell_interrupt_poll();
+        if (shell_command_should_stop()) {
+            return 0;
+        }
         if (keyboard_poll_char(&symbol)) {
             break;
         }
@@ -309,7 +313,9 @@ static void less_view_document(struct less_document *doc)
     bool running = true;
 
     while (running) {
-        shell_interrupt_poll();
+        if (shell_command_should_stop()) {
+            break;
+        }
         size_t max_start = (doc->line_count > viewport_rows) ? (doc->line_count - viewport_rows) : 0u;
         if (top_line > max_start) {
             top_line = max_start;

@@ -633,6 +633,19 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
 }
 
 /**
+ * Report whether a Ctrl-C interrupt has been requested.
+ *
+ * Returns the current interrupt state without modifying it so commands can
+ * perform non-polling checks in tight loops.
+ *
+ * @returns `true` if a Ctrl-C interrupt has been requested, `false` otherwise.
+ */
+bool shell_command_should_stop(void)
+{
+    return shell_interrupt_requested;
+}
+
+/**
  * Remove trailing '/' characters from a path string while preserving a single root '/'.
  *
  * Modifies the provided NUL-terminated string in place by truncating any trailing
@@ -743,11 +756,28 @@ static const struct shell_command *find_command(const char *name, const struct s
 }
 
 /**
- * Write the shell prompt "lux> " to the TTY.
+ * Display the shell prompt that includes the current working directory on the TTY.
+ *
+ * Prompt format: "<cwd>@lux >" where <cwd> is the current working directory string.
  */
 static void prompt(void)
 {
-    tty_write_string("lux> ");
+    tty_write_string(shell_cwd);
+    tty_write_string("@lux >");
+}
+
+/**
+ * Compute the current prompt's character length, including the working directory.
+ * @returns The number of characters in the prompt.
+ */
+static size_t prompt_length(void)
+{
+    size_t cwd_len = 0;
+    while (shell_cwd[cwd_len]) {
+        ++cwd_len;
+    }
+    /* shell_cwd + "@lux >" (6 characters) */
+    return cwd_len + 6;
 }
 
 /**
@@ -853,8 +883,8 @@ static void refresh_prompt_line(const char *buffer, size_t len, size_t previous_
         }
     }
 
-    size_t prompt_len = 5;
-    size_t target_col = prompt_len + cursor_pos;
+    size_t current_prompt_len = prompt_length();
+    size_t target_col = current_prompt_len + cursor_pos;
     tty_set_cursor_position(current_row, target_col);
 }
 

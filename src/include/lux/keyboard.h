@@ -38,3 +38,13 @@ bool keyboard_poll_char(char *out_char);
 bool keyboard_poll_event(struct keyboard_event *event);
 bool keyboard_read_event(struct keyboard_event *event);
 uint8_t keyboard_modifiers(void);
+
+/**
+ * Process a single scancode from an interrupt handler.
+ * Used by IRQ1 (keyboard interrupt) to handle scancodes without polling.
+ * 
+ * @param scancode The PS/2 scancode to process.
+ * @param out_char Optional pointer to receive the translated character (may be NULL).
+ * @returns true if a character was produced, false otherwise.
+ */
+bool keyboard_process_scancode_irq(uint8_t scancode, char *out_char);

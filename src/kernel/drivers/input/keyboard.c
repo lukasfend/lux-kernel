@@ -582,3 +582,35 @@ uint8_t keyboard_modifiers(void)
 {
     return keyboard_current_modifiers();
 }
+
+/**
+ * Process a single PS/2 scancode received from an interrupt handler.
+ *
+ * This function is designed to be called from the IRQ1 (keyboard) interrupt handler
+ * and processes a single scancode, updating modifier state and enqueueing events
+ * without polling the keyboard port.
+ *
+ * @param scancode The PS/2 scancode to process (high bit set indicates key release).
+ * @param out_char Optional pointer to receive the translated character (may be NULL).
+ * @returns true if a character or extended key was produced, false otherwise.
+ */
+bool keyboard_process_scancode_irq(uint8_t scancode, char *out_char)
+{
+    char dummy;
+    if (!out_char) {
+        out_char = &dummy;
+    }
+
+    if (scancode == 0xE0) {
+        extended_scancode_pending = true;
+        return false;
+    }
+
+    bool is_extended = false;
+    if (extended_scancode_pending) {
+        is_extended = true;
+        extended_scancode_pending = false;
+    }
+
+    return keyboard_process_scancode(scancode, is_extended, out_char);
+}
