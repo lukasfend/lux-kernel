@@ -21,12 +21,27 @@ struct less_document {
     const char *label;
 };
 
+/**
+ * Write usage instructions for the `less` shell command to the given shell I/O.
+ *
+ * Outputs a brief invocation line and a short description explaining that `less`
+ * accepts a file path or piped input for paging.
+ */
 static void less_usage(const struct shell_io *io)
 {
     shell_io_write_string(io, "Usage: less <path>\n");
     shell_io_write_string(io, "Provide a path or pipe data into less for paging.\n");
 }
 
+/**
+ * Print a standardized error message for the less command.
+ *
+ * The message is written to the provided shell I/O and formatted as:
+ * "less: <subject>: <reason>\n". If `subject` is NULL, "<input>" is used.
+ *
+ * @param subject Subject of the error shown after the "less: " prefix; may be NULL.
+ * @param reason  Short explanation of the error to display.
+ */
 static void less_print_error(const struct shell_io *io, const char *subject, const char *reason)
 {
     shell_io_write_string(io, "less: ");
@@ -36,6 +51,21 @@ static void less_print_error(const struct shell_io *io, const char *subject, con
     shell_io_write_string(io, "\n");
 }
 
+/**
+ * Load a file from the filesystem into a newly allocated, null-terminated buffer.
+ *
+ * On success the function allocates a buffer containing the file contents (with
+ * an added terminating NUL), sets `*out_data` to the buffer and `*out_len` to
+ * the number of bytes read. On failure an error message is written to `io`.
+ *
+ * @param path Path to the file to load.
+ * @param out_data Pointer that receives the allocated buffer on success; the
+ *                 caller is responsible for freeing it.
+ * @param out_len  Pointer that receives the number of bytes read (excluding the
+ *                 terminating NUL) on success.
+ * @param io       Shell I/O used to report errors.
+ * @returns `true` if the file was loaded and outputs were set, `false` otherwise.
+ */
 static bool less_load_file(const char *path, char **out_data, size_t *out_len, const struct shell_io *io)
 {
     char resolved[SHELL_PATH_MAX];
@@ -94,6 +124,18 @@ static bool less_load_file(const char *path, char **out_data, size_t *out_len, c
     return true;
 }
 
+/**
+ * Copy the shell's input buffer into a newly allocated, NUL-terminated memory buffer.
+ *
+ * Allocates memory to hold the input from `io->input`, copies the bytes, appends a
+ * terminating NUL, and returns the buffer and length via the output parameters.
+ * The caller is responsible for freeing the returned buffer.
+ *
+ * @param io Shell I/O structure containing an input buffer to copy.
+ * @param out_data Pointer to receive the allocated, NUL-terminated buffer on success.
+ * @param out_len Pointer to receive the length of the copied input in bytes (excluding the terminating NUL).
+ * @returns `true` if the input was present and successfully copied; `false` if there was no input or allocation failed.
+ */
 static bool less_copy_input(const struct shell_io *io, char **out_data, size_t *out_len)
 {
     if (!io || !io->input_len) {
@@ -114,6 +156,16 @@ static bool less_copy_input(const struct shell_io *io, char **out_data, size_t *
     return true;
 }
 
+/**
+ * Split the document's raw data into NUL-terminated lines and populate the document's line array and count.
+ *
+ * This function allocates and assigns doc->lines, replaces carriage returns and newline characters
+ * in doc->data with NUL ('\0'), and sets doc->line_count and doc->lines to point at the start of each line.
+ * The caller is responsible for freeing doc->lines and the original doc->data when no longer needed.
+ *
+ * @param doc Pointer to a less_document whose data buffer contains the text to split; doc->data must be non-NULL.
+ * @return `true` if lines were prepared and doc->lines populated successfully, `false` on invalid input or allocation failure.
+ */
 static bool less_prepare_lines(struct less_document *doc)
 {
     if (!doc || !doc->data) {
@@ -154,6 +206,21 @@ static bool less_prepare_lines(struct less_document *doc)
     return true;
 }
 
+/**
+ * Render a page of the document to the TTY and draw a status line.
+ *
+ * Clears the terminal, writes up to `viewport_rows` lines starting at `top_line`
+ * (truncating each line to `cols` if non-zero), and then writes a status line at
+ * `status_row` showing the document label, visible line range, total lines,
+ * and percentage progress. Pads or truncates the status line to fit `cols`
+ * when `cols` is non-zero.
+ *
+ * @param doc Document containing loaded text and line pointers.
+ * @param top_line Index of the first line to display (0-based).
+ * @param viewport_rows Number of text rows available for document lines.
+ * @param status_row Row index where the status line should be rendered.
+ * @param cols Maximum columns per row; if zero, lines are not truncated/padded.
+ */
 static void less_render_page(const struct less_document *doc, size_t top_line, size_t viewport_rows, size_t status_row, size_t cols)
 {
     tty_clear();
@@ -198,6 +265,11 @@ static void less_render_page(const struct less_document *doc, size_t top_line, s
     }
 }
 
+/**
+ * Block until a keyboard character is available, polling for shell interrupts.
+ *
+ * @returns A non-zero character read from the keyboard.
+ */
 static char less_wait_key(void)
 {
     char symbol = 0;
@@ -210,6 +282,15 @@ static char less_wait_key(void)
     return symbol;
 }
 
+/**
+ * Display and interactively page through a loaded document on the TTY.
+ *
+ * Renders pages according to the current terminal size, updates the visible
+ * range in response to navigation keys (Space = page down, Enter/Down = one
+ * line down, Up/k = one line up, b = page up, q/Q or Ctrl-C = quit), shows a
+ * status line, and clears the terminal when the viewer exits.
+ * @param doc Document containing loaded text and line index used for paging.
+ */
 static void less_view_document(struct less_document *doc)
 {
     size_t total_rows = tty_rows();
@@ -293,6 +374,20 @@ static void less_view_document(struct less_document *doc)
     tty_clear();
 }
 
+/**
+ * Handle the "less" shell command: load text from a file or from piped input,
+ * present it interactively in a pager on the terminal, and release resources on exit.
+ *
+ * If a path argument is provided (argc >= 2) the function attempts to load that
+ * file; otherwise it reads from the shell's input buffer. If neither source is
+ * available, usage information is written to the shell. Errors (file access,
+ * read failures, or out-of-memory) are reported to the shell. The pager runs
+ * until the user quits, after which all allocated memory is freed.
+ *
+ * @param argc Number of command-line arguments; if >= 2 the second argument is treated as the file path to view.
+ * @param argv Command-line argument array.
+ * @param io   Shell I/O context used for input (piped data) and output; may be NULL.
+ */
 static void less_handler(int argc, char **argv, const struct shell_io *io)
 {
     char *data = 0;
