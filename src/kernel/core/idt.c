@@ -8,8 +8,9 @@
 #include <lux/io.h>
 
 /**
- * Called from the IRQ1 (keyboard) interrupt handler in idt.asm.
- * Reads available keyboard data and queues it for later consumption.
+ * Read the keyboard scancode from I/O port 0x60 and forward it to the keyboard driver for processing in interrupt context.
+ *
+ * Invoked by the IRQ1 assembly handler.
  */
 void keyboard_irq_handler_c(void)
 {

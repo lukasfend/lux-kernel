@@ -633,12 +633,12 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
 }
 
 /**
- * Check if the current command should stop executing (non-polling check).
+ * Report whether a Ctrl-C interrupt has been requested.
  *
- * This returns the interrupt state without side effects, allowing commands
- * to check periodically in tight loops without needing to call shell_interrupt_poll().
+ * Returns the current interrupt state without modifying it so commands can
+ * perform non-polling checks in tight loops.
  *
- * @returns true if a Ctrl-C interrupt has been requested, false otherwise.
+ * @returns `true` if a Ctrl-C interrupt has been requested, `false` otherwise.
  */
 bool shell_command_should_stop(void)
 {
@@ -756,8 +756,9 @@ static const struct shell_command *find_command(const char *name, const struct s
 }
 
 /**
- * Write the shell prompt showing the current directory to the TTY.
- * Format: /path/to/directory@lux >
+ * Display the shell prompt that includes the current working directory on the TTY.
+ *
+ * Prompt format: "<cwd>@lux >" where <cwd> is the current working directory string.
  */
 static void prompt(void)
 {
@@ -766,8 +767,8 @@ static void prompt(void)
 }
 
 /**
- * Calculate the length of the shell prompt (including current directory).
- * @returns Length of the prompt in characters.
+ * Compute the current prompt's character length, including the working directory.
+ * @returns The number of characters in the prompt.
  */
 static size_t prompt_length(void)
 {

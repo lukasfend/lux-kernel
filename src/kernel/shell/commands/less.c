@@ -266,9 +266,11 @@ static void less_render_page(const struct less_document *doc, size_t top_line, s
 }
 
 /**
- * Block until a keyboard character is available, polling for shell interrupts.
+ * Waits until a keyboard character is available or the shell requests stop.
  *
- * @returns A non-zero character read from the keyboard.
+ * Blocks by polling for input while checking for a shell stop request.
+ *
+ * @returns The character read from the keyboard, or `0` if a shell stop was requested.
  */
 static char less_wait_key(void)
 {
