@@ -22,6 +22,17 @@ void shell_io_write_string(const struct shell_io *io, const char *str);
 void shell_io_putc(const struct shell_io *io, char c);
 bool shell_interrupt_poll(void);
 
+/**
+ * Check if the current command execution should be terminated due to a pending interrupt.
+ * 
+ * This is a non-polling check for use within tight loops in commands. The interrupt
+ * handler sets a flag globally, and this function just checks it. Commands should
+ * call this periodically instead of calling shell_interrupt_poll() which has side effects.
+ * 
+ * @returns true if the command should stop executing, false otherwise.
+ */
+bool shell_command_should_stop(void);
+
 struct shell_command {
 	const char *name;
 	const char *help;

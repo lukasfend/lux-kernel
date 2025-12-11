@@ -28,7 +28,7 @@ static uint32_t noise_rand(void) {
 /**
  * Delay for the configured frame interval while allowing a shell interrupt to abort.
  *
- * Polls for a shell interrupt repeatedly and sleeps in short increments; if an
+ * Checks the interrupt flag repeatedly and sleeps in short increments; if an
  * interrupt is detected the delay ends early.
  *
  * @returns `true` if the full frame delay completed without an interrupt, `false` if
@@ -36,7 +36,7 @@ static uint32_t noise_rand(void) {
  */
 static bool noise_delay(void) {
     for (uint32_t i = 0; i < NOISE_FRAME_DELAY_MS; ++i) {
-        if (shell_interrupt_poll()) {
+        if (shell_command_should_stop()) {
             return false;
         }
         sleep_ms(1);
@@ -91,7 +91,7 @@ static void noise_handler(int argc, char **argv, const struct shell_io *io) {
     tty_clear();
 
     for(uint32_t frame = 0; frame < NOISE_FRAMES; ++frame) {
-        if (shell_interrupt_poll()) {
+        if (shell_command_should_stop()) {
             tty_clear();
             return;
         }

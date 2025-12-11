@@ -274,7 +274,9 @@ static char less_wait_key(void)
 {
     char symbol = 0;
     while (!symbol) {
-        shell_interrupt_poll();
+        if (shell_command_should_stop()) {
+            return 0;
+        }
         if (keyboard_poll_char(&symbol)) {
             break;
         }
@@ -309,7 +311,9 @@ static void less_view_document(struct less_document *doc)
     bool running = true;
 
     while (running) {
-        shell_interrupt_poll();
+        if (shell_command_should_stop()) {
+            break;
+        }
         size_t max_start = (doc->line_count > viewport_rows) ? (doc->line_count - viewport_rows) : 0u;
         if (top_line > max_start) {
             top_line = max_start;

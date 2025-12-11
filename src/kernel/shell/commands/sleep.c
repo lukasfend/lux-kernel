@@ -50,7 +50,7 @@ static bool parse_u32(const char *text, uint32_t *value)
 static bool sleep_interruptible(uint32_t duration)
 {
     for (uint32_t elapsed = 0; elapsed < duration; ++elapsed) {
-        if (shell_interrupt_poll()) {
+        if (shell_command_should_stop()) {
             return false;
         }
         sleep_ms(1);
