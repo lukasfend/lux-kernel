@@ -18,14 +18,16 @@
 #define PIPE_BUFFER_CAPACITY 1024
 #define SHELL_CTRL_C 0x03
 
+static char shell_cwd[SHELL_PATH_MAX] = "/home";
+
 struct shell_redirection {
     bool active;
     bool append;
-    char path[INPUT_BUFFER_SIZE];
+    char path[SHELL_PATH_MAX];
 };
 
 struct shell_file_writer {
-    const struct shell_redirection *redir;
+    char path[SHELL_PATH_MAX];
     size_t offset;
     bool truncate_pending;
     bool failed;
@@ -73,6 +75,7 @@ static void shell_interrupt_reset_state(void);
 static void shell_interrupt_handler(enum interrupt_signal signal, void *context);
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
+static void refresh_prompt_line(const char *buffer, size_t len, size_t previous_len, size_t cursor_pos);
 
 /**
  * Enqueue a character into the pending input circular buffer.
@@ -305,7 +308,6 @@ static bool shell_file_writer_init(struct shell_file_writer *writer, const struc
         return false;
     }
 
-    writer->redir = redir;
     writer->offset = 0;
     writer->truncate_pending = !redir->append;
     writer->failed = false;
@@ -316,7 +318,13 @@ static bool shell_file_writer_init(struct shell_file_writer *writer, const struc
         return false;
     }
 
-    if (!fs_touch(redir->path)) {
+    if (!shell_resolve_path(redir->path, writer->path, sizeof(writer->path))) {
+        tty_write_string("Redirection path too long.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (!fs_touch(writer->path)) {
         tty_write_string("Unable to create redirection target.\n");
         writer->failed = true;
         return false;
@@ -324,7 +332,7 @@ static bool shell_file_writer_init(struct shell_file_writer *writer, const struc
 
     if (redir->append) {
         struct fs_stat stats;
-        if (fs_stat_path(redir->path, &stats)) {
+        if (fs_stat_path(writer->path, &stats)) {
             writer->offset = stats.size;
         }
     }
@@ -335,12 +343,12 @@ static bool shell_file_writer_init(struct shell_file_writer *writer, const struc
 static void shell_file_writer_emit(void *context, const char *data, size_t len)
 {
     struct shell_file_writer *writer = (struct shell_file_writer *)context;
-    if (!writer || writer->failed || !writer->redir || !data || !len) {
+    if (!writer || writer->failed || !data || !len) {
         return;
     }
 
     bool truncate_now = writer->truncate_pending;
-    if (!fs_write(writer->redir->path, writer->offset, data, len, truncate_now)) {
+    if (!fs_write(writer->path, writer->offset, data, len, truncate_now)) {
         tty_write_string("Redirection write failed.\n");
         writer->failed = true;
         return;
@@ -352,12 +360,12 @@ static void shell_file_writer_emit(void *context, const char *data, size_t len)
 
 static void shell_file_writer_finalize(struct shell_file_writer *writer)
 {
-    if (!writer || writer->failed || !writer->redir) {
+    if (!writer || writer->failed) {
         return;
     }
 
     if (writer->truncate_pending) {
-        fs_write(writer->redir->path, 0u, 0, 0u, true);
+        fs_write(writer->path, 0u, 0, 0u, true);
         writer->truncate_pending = false;
     }
 }
@@ -549,6 +557,44 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
     shell_interrupt_requested = true;
 }
 
+static void shell_normalize_path(char *path)
+{
+    if (!path || !*path) {
+        return;
+    }
+
+    size_t len = strlen(path);
+    while (len > 1u && path[len - 1u] == '/') {
+        path[--len] = '\0';
+    }
+}
+
+static void shell_set_cwd_string(const char *path)
+{
+    if (!path || !*path) {
+        shell_cwd[0] = '/';
+        shell_cwd[1] = '\0';
+        return;
+    }
+
+    size_t len = shell_strnlen(path, SHELL_PATH_MAX - 1u);
+    memcpy(shell_cwd, path, len);
+    shell_cwd[len] = '\0';
+    shell_normalize_path(shell_cwd);
+}
+
+static void shell_initialize_working_directory(void)
+{
+    shell_set_cwd_string("/home");
+    if (!fs_ready()) {
+        return;
+    }
+
+    if (!shell_set_cwd("/home")) {
+        shell_set_cwd_string("/");
+    }
+}
+
 /**
  * Replace the current edit buffer with new text and update the displayed prompt.
  *
@@ -563,7 +609,7 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
  * @param text New NUL-terminated text to place into `buffer` (may be NULL to clear).
  * @param previous_len Length of the previously-displayed buffer used to erase leftover characters.
  */
-static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, const char *text, size_t previous_len)
+static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, size_t *cursor_pos, const char *text, size_t previous_len)
 {
     size_t copy_len = 0;
     if (text) {
@@ -572,19 +618,10 @@ static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len,
     }
     buffer[copy_len] = '\0';
     *len = copy_len;
-
-    tty_putc('\r');
-    redraw_prompt_with_buffer(buffer, *len);
-
-    if (previous_len > *len) {
-        size_t diff = previous_len - *len;
-        for (size_t i = 0; i < diff; ++i) {
-            tty_putc(' ');
-        }
-        for (size_t i = 0; i < diff; ++i) {
-            tty_putc('\b');
-        }
+    if (cursor_pos) {
+        *cursor_pos = *len;
     }
+    refresh_prompt_line(buffer, *len, previous_len, cursor_pos ? *cursor_pos : *len);
 }
 
 /**
@@ -681,6 +718,27 @@ static void redraw_prompt_with_buffer(const char *buffer, size_t len)
     }
 }
 
+static void refresh_prompt_line(const char *buffer, size_t len, size_t previous_len, size_t cursor_pos)
+{
+    size_t current_row = 0;
+    size_t current_col = 0;
+    tty_get_cursor_position(&current_row, &current_col);
+    
+    tty_set_cursor_position(current_row, 0);
+    redraw_prompt_with_buffer(buffer, len);
+
+    if (previous_len > len) {
+        size_t diff = previous_len - len;
+        for (size_t i = 0; i < diff; ++i) {
+            tty_putc(' ');
+        }
+    }
+
+    size_t prompt_len = 5;
+    size_t target_col = prompt_len + cursor_pos;
+    tty_set_cursor_position(current_row, target_col);
+}
+
 /**
  * Print all command names that match the given input prefix and restore the prompt.
  *
@@ -726,7 +784,7 @@ static void list_matches(const char *buffer, size_t len, const struct shell_comm
  * @param commands Array of pointers to available shell_command structures.
  * @param command_count Number of entries in commands.
  */
-static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, const struct shell_command *const *commands, size_t command_count)
+static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, size_t *cursor_pos, const struct shell_command *const *commands, size_t command_count)
 {
     if (!commands || !command_count) {
         return;
@@ -734,10 +792,18 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 
     if (!*len) {
         list_matches(buffer, *len, commands, command_count);
+        if (cursor_pos) {
+            *cursor_pos = *len;
+        }
         return;
     }
 
     if (buffer_has_space(buffer, *len)) {
+        tty_putc('\a');
+        return;
+    }
+
+    if (!cursor_pos || *cursor_pos != *len) {
         tty_putc('\a');
         return;
     }
@@ -821,11 +887,12 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
+    size_t cursor_pos = 0;
     int history_offset = -1;
     bool saved_current_valid = false;
     char saved_current[INPUT_BUFFER_SIZE];
 
-    while (len + 1 < capacity) {
+    for (;;) {
         char c = read_char_with_pending();
         if (!c) {
             continue;
@@ -835,6 +902,7 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
             tty_write_string("^C\n");
             buffer[0] = '\0';
             len = 0;
+            cursor_pos = 0;
             history_offset = -1;
             saved_current_valid = false;
             return 0;
@@ -866,7 +934,7 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
             }
 
             size_t previous_len = len;
-            replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+            replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, entry, previous_len);
             continue;
         }
 
@@ -884,14 +952,65 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
                 if (!entry) {
                     history_offset = -1;
                 } else {
-                    replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+                    replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, entry, previous_len);
                     continue;
                 }
             }
 
             const char *fallback = saved_current_valid ? saved_current : 0;
-            replace_buffer_with_text(buffer, capacity, &len, fallback, previous_len);
+            replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, fallback, previous_len);
             saved_current_valid = false;
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_LEFT) {
+            if (cursor_pos > 0) {
+                --cursor_pos;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_RIGHT) {
+            if (cursor_pos < len) {
+                ++cursor_pos;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_DELETE) {
+            if (cursor_pos < len) {
+                size_t previous_len = len;
+                memmove(buffer + cursor_pos, buffer + cursor_pos + 1u, len - cursor_pos);
+                --len;
+                buffer[len] = '\0';
+                history_offset = -1;
+                saved_current_valid = false;
+                refresh_prompt_line(buffer, len, previous_len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_HOME) {
+            if (cursor_pos > 0) {
+                cursor_pos = 0;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_END) {
+            if (cursor_pos < len) {
+                cursor_pos = len;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            }
             continue;
         }
 
@@ -905,26 +1024,41 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
         }
 
         if (c == '\b') {
-            if (len) {
+            if (cursor_pos) {
+                size_t previous_len = len;
+                memmove(buffer + cursor_pos - 1u, buffer + cursor_pos, len - cursor_pos + 1u);
+                --cursor_pos;
                 --len;
-                tty_putc('\b');
+                history_offset = -1;
+                saved_current_valid = false;
+                refresh_prompt_line(buffer, len, previous_len, cursor_pos);
+            } else {
+                tty_putc('\a');
             }
-            history_offset = -1;
-            saved_current_valid = false;
             continue;
         }
 
         if (c == '\t') {
             history_offset = -1;
             saved_current_valid = false;
-            handle_tab_completion(buffer, &len, capacity, commands, command_count);
+            handle_tab_completion(buffer, &len, capacity, &cursor_pos, commands, command_count);
+            refresh_prompt_line(buffer, len, len, cursor_pos);
             continue;
         }
 
-        buffer[len++] = c;
-        tty_putc(c);
+        if (len + 1 >= capacity) {
+            tty_putc('\a');
+            continue;
+        }
+
+        size_t previous_len = len;
+        memmove(buffer + cursor_pos + 1u, buffer + cursor_pos, len - cursor_pos + 1u);
+        buffer[cursor_pos] = c;
+        ++cursor_pos;
+        ++len;
         history_offset = -1;
         saved_current_valid = false;
+        refresh_prompt_line(buffer, len, previous_len, cursor_pos);
     }
 
     buffer[len] = '\0';
@@ -1124,6 +1258,73 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
     return true;
 }
 
+const char *shell_get_cwd(void)
+{
+    return shell_cwd;
+}
+
+bool shell_resolve_path(const char *path, char *out, size_t out_len)
+{
+    if (!out || out_len < 2u) {
+        return false;
+    }
+
+    if (!path || !*path) {
+        size_t cwd_len = shell_strnlen(shell_cwd, out_len - 1u);
+        if (cwd_len >= out_len) {
+            return false;
+        }
+        memcpy(out, shell_cwd, cwd_len + 1u);
+        return true;
+    }
+
+    if (path[0] == '/') {
+        size_t len = shell_strnlen(path, out_len - 1u);
+        if (path[len] != '\0') {
+            return false;
+        }
+        memcpy(out, path, len + 1u);
+        shell_normalize_path(out);
+        return true;
+    }
+
+    size_t cwd_len = strlen(shell_cwd);
+    size_t rel_len = strlen(path);
+    size_t needed = cwd_len + rel_len + 2u;
+    if (needed > out_len) {
+        return false;
+    }
+
+    memcpy(out, shell_cwd, cwd_len);
+    size_t pos = cwd_len;
+    if (!pos || out[pos - 1u] != '/') {
+        out[pos++] = '/';
+    }
+    memcpy(out + pos, path, rel_len + 1u);
+    shell_normalize_path(out);
+    return true;
+}
+
+bool shell_set_cwd(const char *path)
+{
+    if (!fs_ready()) {
+        return false;
+    }
+
+    char resolved[SHELL_PATH_MAX];
+    if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+        return false;
+    }
+
+    struct fs_stat stats;
+    if (!fs_stat_path(resolved, &stats) || !stats.is_dir) {
+        return false;
+    }
+
+    shell_set_cwd_string(resolved);
+    return true;
+}
+
 /**
  * Start and run the interactive shell until it exits.
  *
@@ -1147,6 +1348,8 @@ void shell_run(void)
     if (shell_interrupt_subscription < 0) {
         shell_interrupt_subscription = interrupt_subscribe(INTERRUPT_SIGNAL_CTRL_C, shell_interrupt_handler, 0);
     }
+
+    shell_initialize_working_directory();
 
     tty_write_string("Type 'help' for a list of commands.\n");
 

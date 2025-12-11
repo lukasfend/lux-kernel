@@ -52,13 +52,19 @@ static void mkdir_handler(int argc, char **argv, const struct shell_io *io)
 
     for (int i = 1; i < argc; ++i) {
         const char *path = argv[i];
+        char resolved[SHELL_PATH_MAX];
+        if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+            mkdir_print_error(io, path, "path too long");
+            continue;
+        }
+
         struct fs_stat stats;
-        if (fs_stat_path(path, &stats)) {
+        if (fs_stat_path(resolved, &stats)) {
             mkdir_print_error(io, path, "already exists");
             continue;
         }
 
-        if (!fs_mkdir(path)) {
+        if (!fs_mkdir(resolved)) {
             mkdir_print_error(io, path, "cannot create directory");
         }
     }

@@ -15,6 +15,8 @@ struct shell_io {
 	void *context;
 };
 
+#define SHELL_PATH_MAX 256u
+
 void shell_io_write(const struct shell_io *io, const char *data, size_t len);
 void shell_io_write_string(const struct shell_io *io, const char *str);
 void shell_io_putc(const struct shell_io *io, char c);
@@ -29,3 +31,7 @@ struct shell_command {
 const struct shell_command *const *shell_builtin_commands(size_t *count);
 
 void shell_run(void);
+
+const char *shell_get_cwd(void);
+bool shell_resolve_path(const char *path, char *out, size_t out_len);
+bool shell_set_cwd(const char *path);

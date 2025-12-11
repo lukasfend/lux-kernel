@@ -13,8 +13,13 @@ enum keyboard_layout {
 	KEYBOARD_LAYOUT_DE_DE,
 };
 
-#define KEYBOARD_KEY_ARROW_UP   ((char)0x80)
-#define KEYBOARD_KEY_ARROW_DOWN ((char)0x81)
+#define KEYBOARD_KEY_ARROW_UP    ((char)0x80)
+#define KEYBOARD_KEY_ARROW_DOWN  ((char)0x81)
+#define KEYBOARD_KEY_ARROW_LEFT  ((char)0x82)
+#define KEYBOARD_KEY_ARROW_RIGHT ((char)0x83)
+#define KEYBOARD_KEY_DELETE      ((char)0x84)
+#define KEYBOARD_KEY_HOME        ((char)0x85)
+#define KEYBOARD_KEY_END         ((char)0x86)
 
 #define KEYBOARD_MOD_SHIFT    0x01u
 #define KEYBOARD_MOD_CTRL     0x02u

@@ -38,13 +38,19 @@ static void less_print_error(const struct shell_io *io, const char *subject, con
 
 static bool less_load_file(const char *path, char **out_data, size_t *out_len, const struct shell_io *io)
 {
+    char resolved[SHELL_PATH_MAX];
+    if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+        less_print_error(io, path, "path too long");
+        return false;
+    }
+
     if (!fs_ready()) {
         shell_io_write_string(io, "less: filesystem not available\n");
         return false;
     }
 
     struct fs_stat stats;
-    if (!fs_stat_path(path, &stats)) {
+    if (!fs_stat_path(resolved, &stats)) {
         less_print_error(io, path, "not found");
         return false;
     }
@@ -69,7 +75,7 @@ static bool less_load_file(const char *path, char **out_data, size_t *out_len, c
         }
 
         size_t bytes_read = 0;
-        if (!fs_read(path, offset, buffer + offset, chunk, &bytes_read)) {
+        if (!fs_read(resolved, offset, buffer + offset, chunk, &bytes_read)) {
             free(buffer);
             less_print_error(io, path, "read error");
             return false;

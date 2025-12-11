@@ -39,8 +39,14 @@ static void cat_print_error(const struct shell_io *io, const char *path, const c
  */
 static bool cat_stream_file(const char *path, const struct shell_io *io)
 {
+    char resolved[SHELL_PATH_MAX];
+    if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+        cat_print_error(io, path, "path too long");
+        return false;
+    }
+
     struct fs_stat stats;
-    if (!fs_stat_path(path, &stats)) {
+    if (!fs_stat_path(resolved, &stats)) {
         cat_print_error(io, path, "not found");
         return false;
     }
@@ -59,7 +65,7 @@ static bool cat_stream_file(const char *path, const struct shell_io *io)
         }
 
         size_t bytes_read = 0;
-        if (!fs_read(path, offset, buffer, chunk, &bytes_read)) {
+        if (!fs_read(resolved, offset, buffer, chunk, &bytes_read)) {
             cat_print_error(io, path, "read error");
             return false;
         }

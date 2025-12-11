@@ -91,13 +91,19 @@ static void ls_handler(int argc, char **argv, const struct shell_io *io)
     }
 
     if (argc < 2) {
-        ls_list_path("/", io, false);
+        ls_list_path(shell_get_cwd(), io, false);
         return;
     }
 
     bool show_header = argc > 2;
     for (int i = 1; i < argc; ++i) {
-        ls_list_path(argv[i], io, show_header);
+        char resolved[SHELL_PATH_MAX];
+        if (!shell_resolve_path(argv[i], resolved, sizeof(resolved))) {
+            ls_print_error(io, argv[i]);
+            continue;
+        }
+
+        ls_list_path(resolved, io, show_header);
         if (show_header && i + 1 < argc) {
             shell_io_write_string(io, "\n");
         }
