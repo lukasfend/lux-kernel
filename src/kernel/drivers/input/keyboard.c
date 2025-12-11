@@ -214,10 +214,10 @@ static char translate_scancode(uint8_t scancode)
 }
 
 /**
- * Translate an extended (0xE0-prefixed) PS/2 scancode to a special key value.
+ * Map a 0xE0-prefixed PS/2 scancode to its corresponding special key sentinel.
  *
  * @param scancode Scancode byte that follows the 0xE0 prefix.
- * @returns arrow sentinel values for recognized extended scancodes, `0` otherwise.
+ * @returns Special keyboard sentinel (e.g., `KEYBOARD_KEY_ARROW_*`, `KEYBOARD_KEY_DELETE`, `KEYBOARD_KEY_HOME`, `KEYBOARD_KEY_END`) for recognized extended scancodes, `0` if unrecognized.
  */
 static char translate_extended_scancode(uint8_t scancode)
 {
