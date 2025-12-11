@@ -63,13 +63,19 @@ static void touch_handler(int argc, char **argv, const struct shell_io *io)
 
     for (int i = 1; i < argc; ++i) {
         const char *path = argv[i];
-        if (!fs_touch(path)) {
+        char resolved[SHELL_PATH_MAX];
+        if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+            touch_print_error(io, path, "path too long");
+            continue;
+        }
+
+        if (!fs_touch(resolved)) {
             touch_print_error(io, path, "cannot create file");
             continue;
         }
 
         if (pipe_len) {
-            if (!fs_write(path, 0, pipe_data, pipe_len, true)) {
+            if (!fs_write(resolved, 0, pipe_data, pipe_len, true)) {
                 touch_print_error(io, path, "write failed");
             }
         }

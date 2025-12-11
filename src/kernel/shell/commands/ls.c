@@ -72,12 +72,14 @@ static void ls_list_path(const char *path, const struct shell_io *io, bool show_
 }
 
 /**
- * Handle the "ls" shell command by listing directory contents for the given paths.
+ * Handle the "ls" shell command and write directory listings to the provided shell I/O.
  *
- * If the filesystem is unavailable, writes an error message to the provided IO.
- * With no path arguments, lists the root directory without a header. When one or
- * more paths are provided, lists each path; a header is printed when multiple
- * paths are requested and listings are separated by a blank line.
+ * When no path arguments are given, lists the current working directory. If the
+ * filesystem is not ready, writes "ls: filesystem not available" to the IO.
+ * For each provided path, resolves the path before listing; if resolution
+ * fails, writes a "cannot access" error for that path and continues. When more
+ * than one path is listed, prints a header for each listing and separates
+ * consecutive listings with a blank line.
  *
  * @param argc Number of arguments in argv (command name plus any paths).
  * @param argv Argument vector; argv[1]..argv[argc-1] are treated as paths to list.
@@ -91,13 +93,19 @@ static void ls_handler(int argc, char **argv, const struct shell_io *io)
     }
 
     if (argc < 2) {
-        ls_list_path("/", io, false);
+        ls_list_path(shell_get_cwd(), io, false);
         return;
     }
 
     bool show_header = argc > 2;
     for (int i = 1; i < argc; ++i) {
-        ls_list_path(argv[i], io, show_header);
+        char resolved[SHELL_PATH_MAX];
+        if (!shell_resolve_path(argv[i], resolved, sizeof(resolved))) {
+            ls_print_error(io, argv[i]);
+            continue;
+        }
+
+        ls_list_path(resolved, io, show_header);
         if (show_header && i + 1 < argc) {
             shell_io_write_string(io, "\n");
         }

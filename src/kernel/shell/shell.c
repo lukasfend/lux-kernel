@@ -3,6 +3,7 @@
  * Author: Lukas Fend <lukas.fend@outlook.com>
  * Description: Minimal interactive shell handling input, parsing, and built-ins.
  */
+#include <lux/fs.h>
 #include <lux/interrupt.h>
 #include <lux/keyboard.h>
 #include <lux/shell.h>
@@ -16,6 +17,21 @@
 #define MAX_PIPE_SEGMENTS 4
 #define PIPE_BUFFER_CAPACITY 1024
 #define SHELL_CTRL_C 0x03
+
+static char shell_cwd[SHELL_PATH_MAX] = "/home";
+
+struct shell_redirection {
+    bool active;
+    bool append;
+    char path[SHELL_PATH_MAX];
+};
+
+struct shell_file_writer {
+    char path[SHELL_PATH_MAX];
+    size_t offset;
+    bool truncate_pending;
+    bool failed;
+};
 
 /**
  * Compute the length of a C string up to a maximum limit.
@@ -59,6 +75,7 @@ static void shell_interrupt_reset_state(void);
 static void shell_interrupt_handler(enum interrupt_signal signal, void *context);
 
 static void redraw_prompt_with_buffer(const char *buffer, size_t len);
+static void refresh_prompt_line(const char *buffer, size_t len, size_t previous_len, size_t cursor_pos);
 
 /**
  * Enqueue a character into the pending input circular buffer.
@@ -163,6 +180,269 @@ static void pipe_buffer_writer(void *context, const char *data, size_t len)
     memcpy(buffer->data + buffer->length, data, len);
     buffer->length += len;
     buffer->data[buffer->length] = '\0';
+}
+
+/**
+ * Remove trailing spaces and tab characters from a mutable NUL-terminated string in-place.
+ *
+ * If `text` is NULL or already empty, no action is taken. The function scans from the
+ * end of the string and replaces trailing ' ' and '\t' characters with NUL terminators
+ * until the last character is not a space or tab.
+ *
+ * @param text Mutable NUL-terminated string to trim; may be NULL.
+ */
+static void trim_trailing_whitespace(char *text)
+{
+    if (!text) {
+        return;
+    }
+
+    size_t len = strlen(text);
+    while (len) {
+        char c = text[len - 1u];
+        if (c != ' ' && c != '\t') {
+            break;
+        }
+        text[len - 1u] = '\0';
+        --len;
+    }
+}
+
+/**
+ * Reset a redirection descriptor to an inactive, empty state.
+ *
+ * Clears the active and append flags and sets the path to an empty string.
+ *
+ * @param redir Pointer to the redirection descriptor to clear; no action is taken if NULL.
+ */
+static void shell_redirection_clear(struct shell_redirection *redir)
+{
+    if (!redir) {
+        return;
+    }
+    redir->active = false;
+    redir->append = false;
+    redir->path[0] = '\0';
+}
+
+/**
+ * Parse output redirection (">" for truncate or ">>" for append) from a mutable command
+ * segment and populate the provided redirection descriptor.
+ *
+ * The function may modify `segment` by replacing redirection tokens and surrounding
+ * whitespace with NUL terminators and by trimming trailing whitespace. If a redirection
+ * is present and valid, `redir` is filled with the target path, append flag, and
+ * activated; otherwise `redir` is cleared. Syntax errors and unsupported forms emit
+ * user-visible messages via the TTY.
+ *
+ * @param segment Mutable, NUL-terminated command segment to inspect and modify.
+ * @param redir Destination redirection descriptor to initialize or populate.
+ * @returns `true` if the segment contains a valid command and any present redirection
+ *          was parsed successfully, `false` otherwise.
+ */
+static bool parse_redirection_from_segment(char *segment, struct shell_redirection *redir)
+{
+    if (!segment || !redir) {
+        return false;
+    }
+
+    shell_redirection_clear(redir);
+    bool seen = false;
+
+    for (char *cursor = segment; *cursor; ++cursor) {
+        if (*cursor != '>') {
+            continue;
+        }
+
+        if (seen) {
+            tty_write_string("Multiple output redirections are not supported.\n");
+            return false;
+        }
+        seen = true;
+
+        bool append = false;
+        *cursor = '\0';
+        ++cursor;
+        if (*cursor == '>') {
+            append = true;
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        if (!*cursor) {
+            tty_write_string("Redirection requires a target path.\n");
+            return false;
+        }
+
+        char *path_start = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\t') {
+            ++cursor;
+        }
+        char *path_end = cursor;
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            *cursor = '\0';
+            ++cursor;
+        }
+
+        if (*cursor) {
+            tty_write_string("Redirection accepts only a single target path.\n");
+            return false;
+        }
+
+        size_t path_len = (size_t)(path_end - path_start);
+        if (!path_len) {
+            tty_write_string("Redirection requires a target path.\n");
+            return false;
+        }
+
+        if (path_len >= sizeof(redir->path)) {
+            path_len = sizeof(redir->path) - 1u;
+        }
+        memcpy(redir->path, path_start, path_len);
+        redir->path[path_len] = '\0';
+        redir->append = append;
+        redir->active = true;
+        break;
+    }
+
+    trim_trailing_whitespace(segment);
+
+    if (!segment[0]) {
+        tty_write_string("Command missing before redirection.\n");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Extract redirection information from the last pipeline segment.
+ *
+ * If a last segment contains an output redirection (`>` or `>>`), populate
+ * `redir` with the parsed target path and mode. If inputs are invalid or no
+ * segments are provided, `redir` is cleared when non-NULL.
+ *
+ * @param segments Array of NUL-terminated segment strings (may be NULL if segment_count is 0).
+ * @param segment_count Number of segments in `segments`.
+ * @param redir Output pointer to receive parsed redirection info; cleared when non-NULL on invalid input or no segments.
+ * @returns `true` if redirection was successfully extracted or no segments were provided, `false` otherwise.
+ */
+static bool shell_extract_redirection(char **segments, size_t segment_count, struct shell_redirection *redir)
+{
+    if (!segments || !segment_count || !redir) {
+        if (redir) {
+            shell_redirection_clear(redir);
+        }
+        return segment_count == 0;
+    }
+
+    return parse_redirection_from_segment(segments[segment_count - 1u], redir);
+}
+
+/**
+ * Initialize a shell_file_writer from an active redirection descriptor and prepare the target file.
+ *
+ * Initializes `writer` state (offset, truncate flag, failed flag) and ensures the filesystem
+ * and target path are ready for subsequent writes according to `redir` settings.
+ *
+ * @param writer Pointer to the writer structure to initialize; must be non-NULL.
+ * @param redir  Pointer to an active redirection descriptor that provides the target path and mode.
+ * @returns `true` if initialization succeeded and the file is ready for writing, `false` otherwise.
+ *          On failure `writer->failed` is set and a user-visible message may be emitted.
+ */
+static bool shell_file_writer_init(struct shell_file_writer *writer, const struct shell_redirection *redir)
+{
+    if (!writer || !redir || !redir->active) {
+        return false;
+    }
+
+    writer->offset = 0;
+    writer->truncate_pending = !redir->append;
+    writer->failed = false;
+
+    if (!fs_ready()) {
+        tty_write_string("Filesystem not available for redirection.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (!shell_resolve_path(redir->path, writer->path, sizeof(writer->path))) {
+        tty_write_string("Redirection path too long.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (!fs_touch(writer->path)) {
+        tty_write_string("Unable to create redirection target.\n");
+        writer->failed = true;
+        return false;
+    }
+
+    if (redir->append) {
+        struct fs_stat stats;
+        if (fs_stat_path(writer->path, &stats)) {
+            writer->offset = stats.size;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Write a chunk of data to the file target described by `context` and update writer state.
+ *
+ * Attempts to write `len` bytes from `data` into the writer's path at the writer's current
+ * offset. If the writer had truncation pending, the write will perform truncation for this call.
+ * On successful write the writer's offset is advanced by `len` and truncation pending is cleared.
+ * On failure the writer is marked as failed and an error message is emitted to the TTY.
+ *
+ * @param context Pointer to a `struct shell_file_writer` describing the target file and state.
+ * @param data Buffer containing the bytes to write; if NULL or `len` is zero the function does nothing.
+ * @param len Number of bytes from `data` to write.
+ */
+static void shell_file_writer_emit(void *context, const char *data, size_t len)
+{
+    struct shell_file_writer *writer = (struct shell_file_writer *)context;
+    if (!writer || writer->failed || !data || !len) {
+        return;
+    }
+
+    bool truncate_now = writer->truncate_pending;
+    if (!fs_write(writer->path, writer->offset, data, len, truncate_now)) {
+        tty_write_string("Redirection write failed.\n");
+        writer->failed = true;
+        return;
+    }
+
+    writer->truncate_pending = false;
+    writer->offset += len;
+}
+
+/**
+ * Finalize a file writer by applying any pending truncation.
+ *
+ * If the writer has a pending truncate operation, the target file is truncated
+ * to zero length and the pending flag is cleared. No action is taken if
+ * `writer` is NULL or the writer previously failed.
+ *
+ * @param writer File writer to finalize; may be NULL.
+ */
+static void shell_file_writer_finalize(struct shell_file_writer *writer)
+{
+    if (!writer || writer->failed) {
+        return;
+    }
+
+    if (writer->truncate_pending) {
+        fs_write(writer->path, 0u, 0, 0u, true);
+        writer->truncate_pending = false;
+    }
 }
 
 /**
@@ -353,20 +633,83 @@ static void shell_interrupt_handler(enum interrupt_signal signal, void *context)
 }
 
 /**
- * Replace the current edit buffer with new text and update the displayed prompt.
+ * Remove trailing '/' characters from a path string while preserving a single root '/'.
  *
- * Copies up to capacity-1 bytes from `text` into `buffer`, NUL-terminates it,
- * updates `*len` to the resulting length, redraws the prompt and buffer content,
- * and erases any leftover characters from the previous display if `previous_len`
- * was longer than the new text.
+ * Modifies the provided NUL-terminated string in place by truncating any trailing
+ * slash characters. An input of "/" is left unchanged.
+ *
+ * @param path Mutable NUL-terminated path string to normalize; no action is taken if `path` is NULL or empty.
+ */
+static void shell_normalize_path(char *path)
+{
+    if (!path || !*path) {
+        return;
+    }
+
+    size_t len = strlen(path);
+    while (len > 1u && path[len - 1u] == '/') {
+        path[--len] = '\0';
+    }
+}
+
+/**
+ * Update the in-memory current working directory string to the provided path.
+ *
+ * If `path` is NULL or an empty string, the CWD is set to "/". The value written to
+ * the global CWD buffer is limited to SHELL_PATH_MAX - 1 bytes and is normalized
+ * (trailing slashes are removed except for the root).
+ *
+ * @param path Desired working directory path, or NULL to reset to root.
+ */
+static void shell_set_cwd_string(const char *path)
+{
+    if (!path || !*path) {
+        shell_cwd[0] = '/';
+        shell_cwd[1] = '\0';
+        return;
+    }
+
+    size_t len = shell_strnlen(path, SHELL_PATH_MAX - 1u);
+    memcpy(shell_cwd, path, len);
+    shell_cwd[len] = '\0';
+    shell_normalize_path(shell_cwd);
+}
+
+/**
+ * Initialize the shell's current working directory at startup.
+ *
+ * Sets the in-memory CWD to "/home". If the filesystem is available and
+ * the "/home" directory can be validated as the shell's working directory,
+ * the CWD remains "/home"; otherwise the CWD is set to "/".
+ */
+static void shell_initialize_working_directory(void)
+{
+    shell_set_cwd_string("/home");
+    if (!fs_ready()) {
+        return;
+    }
+
+    if (!shell_set_cwd("/home")) {
+        shell_set_cwd_string("/");
+    }
+}
+
+/**
+ * Replace the edit buffer contents and update the displayed prompt line.
+ *
+ * Sets the editing buffer to the provided NUL-terminated `text` (clears it if `text` is NULL),
+ * updates `*len` to the new length and, if `cursor_pos` is non-NULL, sets `*cursor_pos` to the end
+ * of the new text. Redraws the prompt and buffer contents and erases any leftover characters
+ * from a previously longer display as indicated by `previous_len`.
  *
  * @param buffer Destination editing buffer to replace/display.
  * @param capacity Total size of `buffer` in bytes.
- * @param len Pointer to the current buffer length; updated to the new length.
- * @param text New NUL-terminated text to place into `buffer` (may be NULL to clear).
+ * @param len Pointer to an integer that will be updated with the new buffer length.
+ * @param cursor_pos Optional pointer to the cursor position; set to the new end-of-buffer when provided.
+ * @param text New NUL-terminated text to place into `buffer` (may be NULL to clear the buffer).
  * @param previous_len Length of the previously-displayed buffer used to erase leftover characters.
  */
-static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, const char *text, size_t previous_len)
+static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len, size_t *cursor_pos, const char *text, size_t previous_len)
 {
     size_t copy_len = 0;
     if (text) {
@@ -375,19 +718,10 @@ static void replace_buffer_with_text(char *buffer, size_t capacity, size_t *len,
     }
     buffer[copy_len] = '\0';
     *len = copy_len;
-
-    tty_putc('\r');
-    redraw_prompt_with_buffer(buffer, *len);
-
-    if (previous_len > *len) {
-        size_t diff = previous_len - *len;
-        for (size_t i = 0; i < diff; ++i) {
-            tty_putc(' ');
-        }
-        for (size_t i = 0; i < diff; ++i) {
-            tty_putc('\b');
-        }
+    if (cursor_pos) {
+        *cursor_pos = *len;
     }
+    refresh_prompt_line(buffer, *len, previous_len, cursor_pos ? *cursor_pos : *len);
 }
 
 /**
@@ -471,10 +805,14 @@ static bool buffer_has_space(const char *buffer, size_t len)
 }
 
 /**
- * Print the shell prompt and then echo exactly `len` characters from `buffer`.
+ * Print the shell prompt and write exactly `len` characters from `buffer` to the TTY.
  *
- * @param buffer Pointer to the character buffer to display; may not be null-terminated.
- * @param len Number of characters from `buffer` to write after the prompt.
+ * Writes the prompt, then emits the first `len` bytes from `buffer` without adding
+ * any terminating NUL or additional characters.
+ *
+ * @param buffer Pointer to the character data to display; must be non-NULL and
+ *               may not be NUL-terminated.
+ * @param len    Number of characters from `buffer` to write after the prompt.
  */
 static void redraw_prompt_with_buffer(const char *buffer, size_t len)
 {
@@ -482,6 +820,42 @@ static void redraw_prompt_with_buffer(const char *buffer, size_t len)
     for (size_t i = 0; i < len; ++i) {
         tty_putc(buffer[i]);
     }
+}
+
+/**
+ * Refreshes the shell prompt line display to reflect the current editing buffer.
+ *
+ * Redraws the prompt and exactly `len` characters from `buffer`, clears any
+ * leftover characters from a previously longer line, and positions the cursor
+ * at the location corresponding to `cursor_pos` relative to the start of the
+ * editable text.
+ *
+ * @param buffer Pointer to the editable line buffer to display.
+ * @param len Number of characters from `buffer` to display.
+ * @param previous_len Length of the previously displayed buffer content; any
+ *                     extra characters beyond `len` will be cleared.
+ * @param cursor_pos Cursor position within the buffer (0-based) where the
+ *                   cursor should be placed after redrawing.
+ */
+static void refresh_prompt_line(const char *buffer, size_t len, size_t previous_len, size_t cursor_pos)
+{
+    size_t current_row = 0;
+    size_t current_col = 0;
+    tty_get_cursor_position(&current_row, &current_col);
+    
+    tty_set_cursor_position(current_row, 0);
+    redraw_prompt_with_buffer(buffer, len);
+
+    if (previous_len > len) {
+        size_t diff = previous_len - len;
+        for (size_t i = 0; i < diff; ++i) {
+            tty_putc(' ');
+        }
+    }
+
+    size_t prompt_len = 5;
+    size_t target_col = prompt_len + cursor_pos;
+    tty_set_cursor_position(current_row, target_col);
 }
 
 /**
@@ -510,26 +884,30 @@ static void list_matches(const char *buffer, size_t len, const struct shell_comm
 }
 
 /**
- * Perform tab completion for the current input buffer against available commands.
+ * Complete the current input token using available command names and update the
+ * input buffer, its length, and cursor position as appropriate.
  *
- * Attempts to complete the word in buffer using the command names in commands.
- * If the buffer is empty, prints a list of all commands. If the buffer contains
- * whitespace, emits a bell and does nothing. If one or more commands match the
- * current buffer prefix, appends any longer common prefix that fits into the
- * buffer and echoes the characters to the TTY. If exactly one command matches
- * fully, appends a trailing space (when space remains) and echoes it. If no
- * matches are found, emits a bell. When multiple matches exist and no further
- * characters can be added, lists the matching names.
+ * If the buffer is empty, prints all command names. If the buffer contains a
+ * space or the cursor is not at the end, emits a bell. If one or more commands
+ * match the current buffer prefix, appends any longer common prefix that fits
+ * and echoes the added characters. If exactly one command matches and the full
+ * name fits with extra space available, appends a trailing space and echoes it.
+ * If multiple matches exist and no characters can be appended, lists the
+ * matching names.
  *
- * @param buffer Mutable NUL-terminated input buffer; will be modified when
- *               characters are appended.
- * @param len    Pointer to current length of the text in buffer; updated if
- *               characters are appended.
- * @param capacity Total capacity of buffer including space for the terminating NUL.
+ * @param buffer Mutable NUL-terminated input buffer; modified when characters
+ *               are appended or when a trailing space is added.
+ * @param len    Pointer to the current length of the text in buffer; updated
+ *               when characters are appended.
+ * @param capacity Total capacity of buffer including space for the terminating
+ *                 NUL.
+ * @param cursor_pos Optional pointer to the current cursor position within the
+ *                   buffer; updated to the new end when listing all commands
+ *                   from an empty buffer.
  * @param commands Array of pointers to available shell_command structures.
  * @param command_count Number of entries in commands.
  */
-static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, const struct shell_command *const *commands, size_t command_count)
+static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, size_t *cursor_pos, const struct shell_command *const *commands, size_t command_count)
 {
     if (!commands || !command_count) {
         return;
@@ -537,10 +915,18 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 
     if (!*len) {
         list_matches(buffer, *len, commands, command_count);
+        if (cursor_pos) {
+            *cursor_pos = *len;
+        }
         return;
     }
 
     if (buffer_has_space(buffer, *len)) {
+        tty_putc('\a');
+        return;
+    }
+
+    if (!cursor_pos || *cursor_pos != *len) {
         tty_putc('\a');
         return;
     }
@@ -624,11 +1010,12 @@ static void handle_tab_completion(char *buffer, size_t *len, size_t capacity, co
 static size_t read_line(char *buffer, size_t capacity, const struct shell_command *const *commands, size_t command_count)
 {
     size_t len = 0;
+    size_t cursor_pos = 0;
     int history_offset = -1;
     bool saved_current_valid = false;
     char saved_current[INPUT_BUFFER_SIZE];
 
-    while (len + 1 < capacity) {
+    for (;;) {
         char c = read_char_with_pending();
         if (!c) {
             continue;
@@ -638,6 +1025,7 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
             tty_write_string("^C\n");
             buffer[0] = '\0';
             len = 0;
+            cursor_pos = 0;
             history_offset = -1;
             saved_current_valid = false;
             return 0;
@@ -669,7 +1057,7 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
             }
 
             size_t previous_len = len;
-            replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+            replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, entry, previous_len);
             continue;
         }
 
@@ -687,14 +1075,65 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
                 if (!entry) {
                     history_offset = -1;
                 } else {
-                    replace_buffer_with_text(buffer, capacity, &len, entry, previous_len);
+                    replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, entry, previous_len);
                     continue;
                 }
             }
 
             const char *fallback = saved_current_valid ? saved_current : 0;
-            replace_buffer_with_text(buffer, capacity, &len, fallback, previous_len);
+            replace_buffer_with_text(buffer, capacity, &len, &cursor_pos, fallback, previous_len);
             saved_current_valid = false;
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_LEFT) {
+            if (cursor_pos > 0) {
+                --cursor_pos;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_ARROW_RIGHT) {
+            if (cursor_pos < len) {
+                ++cursor_pos;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_DELETE) {
+            if (cursor_pos < len) {
+                size_t previous_len = len;
+                memmove(buffer + cursor_pos, buffer + cursor_pos + 1u, len - cursor_pos);
+                --len;
+                buffer[len] = '\0';
+                history_offset = -1;
+                saved_current_valid = false;
+                refresh_prompt_line(buffer, len, previous_len, cursor_pos);
+            } else {
+                tty_putc('\a');
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_HOME) {
+            if (cursor_pos > 0) {
+                cursor_pos = 0;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            }
+            continue;
+        }
+
+        if ((unsigned char)c == (unsigned char)KEYBOARD_KEY_END) {
+            if (cursor_pos < len) {
+                cursor_pos = len;
+                refresh_prompt_line(buffer, len, len, cursor_pos);
+            }
             continue;
         }
 
@@ -708,26 +1147,41 @@ static size_t read_line(char *buffer, size_t capacity, const struct shell_comman
         }
 
         if (c == '\b') {
-            if (len) {
+            if (cursor_pos) {
+                size_t previous_len = len;
+                memmove(buffer + cursor_pos - 1u, buffer + cursor_pos, len - cursor_pos + 1u);
+                --cursor_pos;
                 --len;
-                tty_putc('\b');
+                history_offset = -1;
+                saved_current_valid = false;
+                refresh_prompt_line(buffer, len, previous_len, cursor_pos);
+            } else {
+                tty_putc('\a');
             }
-            history_offset = -1;
-            saved_current_valid = false;
             continue;
         }
 
         if (c == '\t') {
             history_offset = -1;
             saved_current_valid = false;
-            handle_tab_completion(buffer, &len, capacity, commands, command_count);
+            handle_tab_completion(buffer, &len, capacity, &cursor_pos, commands, command_count);
+            refresh_prompt_line(buffer, len, len, cursor_pos);
             continue;
         }
 
-        buffer[len++] = c;
-        tty_putc(c);
+        if (len + 1 >= capacity) {
+            tty_putc('\a');
+            continue;
+        }
+
+        size_t previous_len = len;
+        memmove(buffer + cursor_pos + 1u, buffer + cursor_pos, len - cursor_pos + 1u);
+        buffer[cursor_pos] = c;
+        ++cursor_pos;
+        ++len;
         history_offset = -1;
         saved_current_valid = false;
+        refresh_prompt_line(buffer, len, previous_len, cursor_pos);
     }
 
     buffer[len] = '\0';
@@ -844,13 +1298,22 @@ static bool parse_pipeline(char *line, char **segments, size_t *segment_count)
  * @param segment_count Number of entries in `segments`.
  * @param commands Array of available `shell_command` pointers used for command lookup.
  * @param command_count Number of entries in `commands`.
+ * @param redir Optional redirection target applied to the output of the last pipeline stage.
  * @returns `true` if all pipeline segments were executed successfully, `false` if execution failed (e.g., empty segment or unknown command).
  */
-static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count)
+static bool execute_pipeline(char **segments, size_t segment_count, const struct shell_command *const *commands, size_t command_count, const struct shell_redirection *redir)
 {
     char pipe_storage[PIPE_BUFFER_CAPACITY];
     size_t pipe_storage_len = 0;
     bool pipe_storage_valid = false;
+    bool use_redirection = (redir && redir->active);
+    struct shell_file_writer file_writer;
+
+    if (use_redirection) {
+        if (!shell_file_writer_init(&file_writer, redir)) {
+            return false;
+        }
+    }
 
     for (size_t i = 0; i < segment_count; ++i) {
         char *argv_local[MAX_ARGS];
@@ -884,6 +1347,9 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
             pipe_buffer_init(&pipe_buffer);
             io.write = pipe_buffer_writer;
             io.context = &pipe_buffer;
+        } else if (use_redirection) {
+            io.write = shell_file_writer_emit;
+            io.context = &file_writer;
         } else {
             io.write = tty_writer;
             io.context = 0;
@@ -908,17 +1374,117 @@ static bool execute_pipeline(char **segments, size_t segment_count, const struct
         }
     }
 
+    if (use_redirection) {
+        shell_file_writer_finalize(&file_writer);
+    }
+
     return true;
 }
 
 /**
- * Start and run the interactive shell until it exits.
+ * Get the shell's current working directory string.
  *
- * Initializes the registered builtin commands and, if none are available, writes
- * an error to the TTY and returns. Otherwise prints a startup hint and enters a
- * loop that prompts for user input, records non-empty lines in history,
- * parses the line into pipeline segments, and executes the resulting commands
- * until the shell is terminated.
+ * @returns Pointer to the null-terminated current working directory string.
+ *          The pointer refers to internal shell storage and must not be modified
+ *          by the caller; its contents may change on subsequent shell operations.
+ */
+const char *shell_get_cwd(void)
+{
+    return shell_cwd;
+}
+
+/**
+ * Resolve a file system path into an absolute, normalized path based on the shell's current working directory.
+ *
+ * If `path` is NULL or an empty string, the current working directory is copied to `out`. If `path` is absolute
+ * (begins with '/'), it is copied and normalized. If `path` is relative, it is appended to the current working
+ * directory with a separating '/' when necessary and then normalized.
+ *
+ * @param path Path to resolve; may be NULL or empty to request the current working directory.
+ * @param out Buffer that receives the resolved, NUL-terminated absolute path.
+ * @param out_len Size of the `out` buffer in bytes; must be at least 2.
+ * @returns `true` if the resolved absolute path (NUL-terminated) was written to `out`, `false` on error
+ *          (invalid arguments, insufficient buffer space, or malformed input).
+ */
+bool shell_resolve_path(const char *path, char *out, size_t out_len)
+{
+    if (!out || out_len < 2u) {
+        return false;
+    }
+
+    if (!path || !*path) {
+        size_t cwd_len = shell_strnlen(shell_cwd, out_len - 1u);
+        if (cwd_len >= out_len) {
+            return false;
+        }
+        memcpy(out, shell_cwd, cwd_len + 1u);
+        return true;
+    }
+
+    if (path[0] == '/') {
+        size_t len = shell_strnlen(path, out_len - 1u);
+        if (path[len] != '\0') {
+            return false;
+        }
+        memcpy(out, path, len + 1u);
+        shell_normalize_path(out);
+        return true;
+    }
+
+    size_t cwd_len = strlen(shell_cwd);
+    size_t rel_len = strlen(path);
+    size_t needed = cwd_len + rel_len + 2u;
+    if (needed > out_len) {
+        return false;
+    }
+
+    memcpy(out, shell_cwd, cwd_len);
+    size_t pos = cwd_len;
+    if (!pos || out[pos - 1u] != '/') {
+        out[pos++] = '/';
+    }
+    memcpy(out + pos, path, rel_len + 1u);
+    shell_normalize_path(out);
+    return true;
+}
+
+/**
+ * Set the shell's current working directory to the given path.
+ *
+ * Resolves the provided path (relative paths are resolved against the current
+ * working directory), verifies the filesystem is available, and checks that the
+ * resolved path exists and is a directory before updating the in-memory CWD.
+ *
+ * @param path Path to set as the current working directory; may be absolute or relative.
+ * @returns `true` if the working directory was successfully updated, `false` otherwise.
+ */
+bool shell_set_cwd(const char *path)
+{
+    if (!fs_ready()) {
+        return false;
+    }
+
+    char resolved[SHELL_PATH_MAX];
+    if (!shell_resolve_path(path, resolved, sizeof(resolved))) {
+        return false;
+    }
+
+    struct fs_stat stats;
+    if (!fs_stat_path(resolved, &stats) || !stats.is_dir) {
+        return false;
+    }
+
+    shell_set_cwd_string(resolved);
+    return true;
+}
+
+/**
+ * Run the interactive shell loop until termination.
+ *
+ * Initializes builtin commands and the working directory, prints a startup hint,
+ * then repeatedly prompts for input, records non-empty lines in history,
+ * parses input into pipeline segments (with optional output redirection),
+ * and executes the resulting pipeline of commands.
  */
 void shell_run(void)
 {
@@ -934,6 +1500,8 @@ void shell_run(void)
     if (shell_interrupt_subscription < 0) {
         shell_interrupt_subscription = interrupt_subscribe(INTERRUPT_SIGNAL_CTRL_C, shell_interrupt_handler, 0);
     }
+
+    shell_initialize_working_directory();
 
     tty_write_string("Type 'help' for a list of commands.\n");
 
@@ -953,6 +1521,11 @@ void shell_run(void)
             continue;
         }
 
-        execute_pipeline(segments, segment_count, commands, command_count);
+        struct shell_redirection redirection;
+        if (!shell_extract_redirection(segments, segment_count, &redirection)) {
+            continue;
+        }
+
+        execute_pipeline(segments, segment_count, commands, command_count, &redirection);
     }
 }

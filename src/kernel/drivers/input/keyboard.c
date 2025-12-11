@@ -214,10 +214,10 @@ static char translate_scancode(uint8_t scancode)
 }
 
 /**
- * Translate an extended (0xE0-prefixed) PS/2 scancode to a special key value.
+ * Map a 0xE0-prefixed PS/2 scancode to its corresponding special key sentinel.
  *
  * @param scancode Scancode byte that follows the 0xE0 prefix.
- * @returns `KEYBOARD_KEY_ARROW_UP` for 0x48, `KEYBOARD_KEY_ARROW_DOWN` for 0x50, `0` for unrecognized extended scancodes.
+ * @returns Special keyboard sentinel (e.g., `KEYBOARD_KEY_ARROW_*`, `KEYBOARD_KEY_DELETE`, `KEYBOARD_KEY_HOME`, `KEYBOARD_KEY_END`) for recognized extended scancodes, `0` if unrecognized.
  */
 static char translate_extended_scancode(uint8_t scancode)
 {
@@ -226,6 +226,16 @@ static char translate_extended_scancode(uint8_t scancode)
         return KEYBOARD_KEY_ARROW_UP;
     case 0x50:
         return KEYBOARD_KEY_ARROW_DOWN;
+    case 0x4B:
+        return KEYBOARD_KEY_ARROW_LEFT;
+    case 0x4D:
+        return KEYBOARD_KEY_ARROW_RIGHT;
+    case 0x53:
+        return KEYBOARD_KEY_DELETE;
+    case 0x47:
+        return KEYBOARD_KEY_HOME;
+    case 0x4F:
+        return KEYBOARD_KEY_END;
     default:
         return 0;
     }
